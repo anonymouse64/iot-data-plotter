@@ -179,9 +179,8 @@ func (cmd *CheckConfigCmd) Execute(args []string) (err error) {
 		if cmd.WriteNewFile {
 			// write out a new file then
 			return WriteConfig(currentCmd.ConfigFile, nil)
-		} else {
-			return fmt.Errorf("config file %s doesn't exist", currentCmd.ConfigFile)
 		}
+		return fmt.Errorf("config file %s doesn't exist", currentCmd.ConfigFile)
 	}
 	// otherwise the file exists, so load it
 	return LoadConfig(currentCmd.ConfigFile)

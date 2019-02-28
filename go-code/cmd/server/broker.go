@@ -64,6 +64,7 @@ func (b *Broker) Publish(msg interface{}) {
 	b.publishCh <- msg
 }
 
+// Unsubscribe closes and deletes a channel that was subscribed
 func (b *Broker) Unsubscribe(msgCh chan interface{}) {
 	b.unsubCh <- msgCh
 	close(msgCh)

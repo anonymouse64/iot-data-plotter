@@ -142,6 +142,7 @@ func recurseLeaves(tree *toml.Tree, prefix string, leaves *[]string) {
 	}
 }
 
+// SetTreeValues takes a toml.Tree and a map of key values to update in the tree
 func SetTreeValues(valmap map[string]interface{}, tree *toml.Tree) (*ServerConfig, error) {
 	allKeys := TomlConfigKeys(tree)
 	// iterate over the values, setting them inside the tree
