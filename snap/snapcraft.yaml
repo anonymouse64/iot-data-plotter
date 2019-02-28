@@ -13,4 +13,5 @@ parts:
     plugin: go
     source: go-code
     build-snaps: [go]
+    go-importpath: github.com/anonymouse64/websockets-mqtt-visualizer
     build-packages: [build-essential, gcc]
