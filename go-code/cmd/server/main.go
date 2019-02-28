@@ -132,16 +132,15 @@ type SetConfigCmd struct {
 
 // Execute of SetConfigCmd will set config values from the command line inside the config file
 // TODO: not implemented yet
-func (cmd *SetConfigCmd) Execute(args []string) (err error) {
-	// Load the config file
-	err = LoadConfig(currentCmd.ConfigFile)
+func (cmd *SetConfigCmd) Execute(args []string) error {
+	var val interface{}
+	// assume the value is a single valid json value to parse it
+	err := json.Unmarshal([]byte(cmd.Args.Value), &val)
 	if err != nil {
-		return
+		return err
 	}
-
-	// Now get the keys into the struct to set the values in the struct
-
-	return
+	// try to write the value into the toml file using the key
+	return WriteTomlFileKeyVal(currentCmd.ConfigFile, cmd.Args.Key, val)
 }
 
 // GetConfigCmd is a command for getting config values from the config file

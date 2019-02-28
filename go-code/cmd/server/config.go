@@ -74,6 +74,11 @@ func WriteConfig(file string, userconfig *ServerConfig) error {
 		cfgToUse = userconfig
 	}
 
+	err = checkConfig(Config)
+	if err != nil {
+		return err
+	}
+
 	// encode the config to the file
 	return toml.NewEncoder(f).Encode(*cfgToUse)
 }
@@ -104,6 +109,76 @@ func checkConfig(cfg *ServerConfig) error {
 	default:
 		return nil
 	}
+}
+
+// WriteTomlTreeKeyVal takes a toml tree and writes a key directly into it
+// handling proper casting of floats to ints
+// NOTE it doesn't check to see if the key is in the tree
+func WriteTomlTreeKeyVal(tree *toml.Tree, key string, val interface{}) {
+	// before setting the value, we need to check if the type of this key is an integer
+	// because if the key is an integer value, when we are provided the interface{}, the
+	// value we go to assign might actually be a float, because when we parse the values
+	// from snapd, all numbers are interpreted as floats, so we have to convert the float
+	// inside the interface{} to an int before assigning
+	srcType := reflect.TypeOf(val).Kind()
+	if srcType == reflect.Float32 || srcType == reflect.Float64 {
+		// the source value is a float, check if the destination type is a
+		// integer, in which case we should attempt to cast it before assigning
+		// if any of these panic, that's fine because then the user provided an invalid value
+		// for this field
+		dstType := reflect.TypeOf(tree.Get(key)).Kind()
+		floatVal := reflect.ValueOf(val).Float()
+		switch dstType {
+		case reflect.Int:
+			tree.Set(key, int(floatVal))
+		case reflect.Int8:
+			tree.Set(key, int8(floatVal))
+		case reflect.Int16:
+			tree.Set(key, int16(floatVal))
+		case reflect.Int32:
+			tree.Set(key, int32(floatVal))
+		case reflect.Int64:
+			tree.Set(key, int64(floatVal))
+		case reflect.Uint:
+			tree.Set(key, uint(floatVal))
+		case reflect.Uint8:
+			tree.Set(key, uint8(floatVal))
+		case reflect.Uint16:
+			tree.Set(key, uint16(floatVal))
+		case reflect.Uint32:
+			tree.Set(key, uint32(floatVal))
+		case reflect.Uint64:
+			tree.Set(key, uint64(floatVal))
+		default:
+			// not an integer type, so just assign as is
+			tree.Set(key, val)
+		}
+	} else {
+		tree.Set(key, val)
+	}
+}
+
+func WriteTomlFileKeyVal(tomlFile string, key string, val interface{}) error {
+	tree, err := TomlConfigTree(tomlFile)
+	if err != nil {
+		return err
+	}
+	allKeys := TomlConfigKeys(tree)
+	// check to make sure that this key exists
+	if !stringInSlice(strings.TrimSpace(key), allKeys) {
+		return fmt.Errorf("invalid key %s", key)
+	}
+	// write the key into the tree
+	WriteTomlTreeKeyVal(tree, key, val)
+	// sync the tree into a config struct
+	f, err := os.OpenFile(tomlFile, os.O_WRONLY, os.ModeAppend)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = tree.WriteTo(f)
+	return err
 }
 
 // TomlConfigTree is a simple wrapper function to get the toml tree from a config file
@@ -151,47 +226,7 @@ func SetTreeValues(valmap map[string]interface{}, tree *toml.Tree) (*ServerConfi
 		if !stringInSlice(strings.TrimSpace(key), allKeys) {
 			return nil, fmt.Errorf("invalid key %s", key)
 		}
-		// before setting the value, we need to check if the type of this key is an integer
-		// because if the key is an integer value, when we are provided the interface{}, the
-		// value we go to assign might actually be a float, because when we parse the values
-		// from snapd, all numbers are interpreted as floats, so we have to convert the float
-		// inside the interface{} to an int before assigning
-		srcType := reflect.TypeOf(val).Kind()
-		if srcType == reflect.Float32 || srcType == reflect.Float64 {
-			// the source value is a float, check if the destination type is a
-			// integer, in which case we should attempt to cast it before assigning
-			// if any of these panic, that's fine because then the user provided an invalid value
-			// for this field
-			dstType := reflect.TypeOf(tree.Get(key)).Kind()
-			floatVal := reflect.ValueOf(val).Float()
-			switch dstType {
-			case reflect.Int:
-				tree.Set(key, int(floatVal))
-			case reflect.Int8:
-				tree.Set(key, int8(floatVal))
-			case reflect.Int16:
-				tree.Set(key, int16(floatVal))
-			case reflect.Int32:
-				tree.Set(key, int32(floatVal))
-			case reflect.Int64:
-				tree.Set(key, int64(floatVal))
-			case reflect.Uint:
-				tree.Set(key, uint(floatVal))
-			case reflect.Uint8:
-				tree.Set(key, uint8(floatVal))
-			case reflect.Uint16:
-				tree.Set(key, uint16(floatVal))
-			case reflect.Uint32:
-				tree.Set(key, uint32(floatVal))
-			case reflect.Uint64:
-				tree.Set(key, uint64(floatVal))
-			default:
-				// not an integer type, so just assign as is
-				tree.Set(key, val)
-			}
-		} else {
-			tree.Set(key, val)
-		}
+		WriteTomlTreeKeyVal(tree, key, val)
 	}
 
 	// marshal the tree to toml bytes, then unmarshal the bytes into the struct
