@@ -232,7 +232,7 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 			log.Println("sleeping for 3 seconds")
 			time.Sleep(time.Second * 3)
 			initialConnectTries++
-			if initialConnectTries > maxInitialConnectTries {
+			if initialConnectTries == maxInitialConnectTries {
 				log.Fatalf("failed to connect to broker after %d tries\n", initialConnectTries)
 			}
 		} else {
