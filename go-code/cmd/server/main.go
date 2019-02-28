@@ -203,6 +203,7 @@ func main() {
 
 // Execute of StartCmd will start running the web server
 func (cmd *StartCmd) Execute(args []string) (err error) {
+	// load the configuration for the server
 	err = LoadConfig(currentCmd.ConfigFile)
 	if err != nil {
 		return err
@@ -216,83 +217,11 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 
 	// defaultCertsDir := "/snap/test-mqtts-server/current/certs"
 
-	// Make an options struct for the mqtt client
-	connOpts := MQTT.NewClientOptions()
-
-	// always use a clean session
-	connOpts.SetCleanSession(true)
-
-	// always reconnect
-	connOpts.SetAutoReconnect(true)
-
-	conf := &tls.Config{}
-	mqttScheme := Config.MQTTConfig.Scheme
-
-	// build the URL - first we need to check if the configured scheme is
-	// the empty string, in which case we assume insecure
-	switch Config.MQTTConfig.Scheme {
-	case "":
-		fallthrough
-	case "tcp":
-		// insecure mode - don't try to use use any tls certificates
-		mqttScheme = "tcp"
-	case "tls":
-		fallthrough
-	case "tcps":
-		fallthrough
-	case "ssl":
-		// secure mode - ensure that we always perform host verification
-		conf.InsecureSkipVerify = false
-
-		// load server/client certificate if they are specified and exist
-		if Config.MQTTConfig.ClientCertFile != "" || Config.MQTTConfig.ClientKeyFile != "" {
-			// is non-empty string so assume it is supposed to exist
-			// get the client certificate pair and load them
-			clientCert, err := tls.LoadX509KeyPair(Config.MQTTConfig.ClientCertFile, Config.MQTTConfig.ClientKeyFile)
-			if err != nil {
-				log.Fatalf("couldn't make client cert: %v\n", clientCert, err)
-			}
-
-			// add the client certificate to the tls configuration
-			conf.Certificates = []tls.Certificate{clientCert}
-		}
-
-		// check if there's an additional server cert to use for verification
-		if Config.MQTTConfig.ServerCertFile != "" {
-			brokerCACert, err := ioutil.ReadFile(Config.MQTTConfig.ServerCertFile)
-			if err != nil {
-				log.Fatalf("couldn't open broker ca cert file at %s: %v\n", Config.MQTTConfig.ServerCertFile, err)
-			}
-
-			certPool := x509.NewCertPool()
-			certPool.AppendCertsFromPEM(brokerCACert)
-			conf.RootCAs = certPool
-		}
-
-		connOpts.SetTLSConfig(conf)
-	default:
-		// somehow got an invalid tls configuration
-		log.Fatalf("invalid mqtt scheme %s\n", Config.MQTTConfig.Scheme)
+	// build an mqtt client out of the configuration
+	client, err := buildMQTTClient(Config.MQTTConfig)
+	if err != nil {
+		log.Fatalf("failed to build mqtt client: %s\n", err)
 	}
-
-	// build the broker URL and add that
-	connOpts.AddBroker(fmt.Sprintf("%s://%s:%d%s",
-		mqttScheme,
-		Config.MQTTConfig.Host,
-		Config.MQTTConfig.Port,
-		Config.MQTTConfig.Path,
-	))
-
-	// if the client ID for the MQTT client is empty, then generate a random
-	// one
-	if Config.MQTTConfig.ClientID == "" {
-		connOpts.SetClientID(generateRandomClientID())
-	} else {
-		connOpts.SetClientID(Config.MQTTConfig.ClientID)
-	}
-
-	// create the client
-	client := MQTT.NewClient(connOpts)
 
 	// make an mqtt connection to the broker - giving up and dying after 10
 	// unsuccessful tries, every 3 seconds
@@ -340,7 +269,7 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 }
 
 // makeOnMessageFunc returns a lambda function which publishes all mqtt messages
-// recieved to the broker
+// received to the broker
 func makeOnMessageFunc(channelBroker *Broker) MQTT.MessageHandler {
 	return func(client MQTT.Client, msg MQTT.Message) {
 		opts := client.OptionsReader()
@@ -358,4 +287,89 @@ func generateRandomClientID() string {
 		panic("can't build base62 encoder for random client ID's")
 	}
 	return encoder.Encode(uuidBytes[:])
+}
+
+func buildMQTTClient(config mqttConfig) (MQTT.Client, error) {
+	// Make an options struct for the mqtt client
+	connOpts := MQTT.NewClientOptions()
+
+	// always use a clean session
+	connOpts.SetCleanSession(true)
+
+	// always reconnect
+	connOpts.SetAutoReconnect(true)
+
+	conf := &tls.Config{}
+	mqttScheme := config.Scheme
+
+	// build the URL - first we need to check if the configured scheme is
+	// the empty string, in which case we assume insecure
+	switch config.Scheme {
+	case "":
+		fallthrough
+	case "tcp":
+		// insecure mode - don't try to use use any tls certificates
+		mqttScheme = "tcp"
+	case "tls":
+		fallthrough
+	case "tcps":
+		fallthrough
+	case "ssl":
+		// secure mode - ensure that we always perform host verification
+		conf.InsecureSkipVerify = false
+
+		// load server/client certificate if they are specified and exist
+		if config.ClientCertFile != "" || config.ClientKeyFile != "" {
+			// is non-empty string so assume it is supposed to exist
+			// get the client certificate pair and load them
+			clientCert, err := tls.LoadX509KeyPair(config.ClientCertFile, config.ClientKeyFile)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"couldn't make client cert from certfile %s and keyfile %s: %v",
+					config.ClientCertFile,
+					config.ClientKeyFile,
+					err,
+				)
+			}
+
+			// add the client certificate to the tls configuration
+			conf.Certificates = []tls.Certificate{clientCert}
+		}
+
+		// check if there's an additional server cert to use for verification
+		if config.ServerCertFile != "" {
+			brokerCACert, err := ioutil.ReadFile(config.ServerCertFile)
+			if err != nil {
+				return nil, fmt.Errorf("couldn't open broker ca cert file at %s: %v", config.ServerCertFile, err)
+			}
+
+			certPool := x509.NewCertPool()
+			certPool.AppendCertsFromPEM(brokerCACert)
+			conf.RootCAs = certPool
+		}
+
+		connOpts.SetTLSConfig(conf)
+	default:
+		// somehow got an invalid tls configuration
+		return nil, fmt.Errorf("invalid mqtt scheme %s", config.Scheme)
+	}
+
+	// build the broker URL and add that
+	connOpts.AddBroker(fmt.Sprintf("%s://%s:%d%s",
+		mqttScheme,
+		config.Host,
+		config.Port,
+		config.Path,
+	))
+
+	// if the client ID for the MQTT client is empty, then generate a random
+	// one
+	if config.ClientID == "" {
+		connOpts.SetClientID(generateRandomClientID())
+	} else {
+		connOpts.SetClientID(config.ClientID)
+	}
+
+	// create the client
+	return MQTT.NewClient(connOpts), nil
 }
