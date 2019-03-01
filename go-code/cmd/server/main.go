@@ -386,10 +386,31 @@ func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r
 		subChannel := msgBroker.Subscribe()
 
 		// forward any messages from the MQTT channel and send on the
-		// websockets connection
+		// websockets connection, assuming JSON content and adding a current
+		// timestamp
 		for msg := range subChannel {
 			if mqttMsg, ok := msg.(MQTT.Message); ok {
-				err = c.WriteMessage(websocket.TextMessage, mqttMsg.Payload())
+				// get the MQTT message payload as JSON
+				msgObj := make(map[string]interface{})
+				err = json.Unmarshal(mqttMsg.Payload(), &msgObj)
+				if err != nil {
+					// invalid message, drop it
+					log.Printf("error parsing json message: %v\n", err)
+					continue
+				}
+
+				// add the current time to the object and then wrap it back
+				// up into a json string payload
+				msgObj["time"] = time.Now().Format(time.RFC3339)
+				msgBytes, err := json.Marshal(msgObj)
+				if err != nil {
+					// invalid message, drop it
+					log.Printf("error building json message: %v\n", err)
+					continue
+				}
+
+				// write the message to the websockets client
+				err = c.WriteMessage(websocket.TextMessage, msgBytes)
 				if err != nil {
 					log.Printf("error writing message %s\n", err)
 					break
