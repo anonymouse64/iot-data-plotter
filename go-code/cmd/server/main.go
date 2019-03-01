@@ -12,46 +12,101 @@ import (
 	"os/exec"
 	"time"
 
+	tc "github.com/anonymouse64/websockets-mqtt-visualizer/tomlconfigurator"
+
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/eknkc/basex"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	flags "github.com/jessevdk/go-flags"
+	toml "github.com/pelletier/go-toml"
 )
 
 var upgrader = websocket.Upgrader{}
 
 const maxInitialConnectTries = 10
 
-// makeForwardMQTTMessageFunc returns a lambda function which uses the broker
-// to create a new subscription channel for the http request, and thus
-// receives all mqtt messages and forwards them to the http client (which is
-// upgraded to a websockets client)
-func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// upgrade the HTTP request to a websockets connection
-		c, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Print("upgrade:", err)
-			return
-		}
-		defer c.Close()
+type mqttConfig struct {
+	Port           int    `toml:"port"`
+	Scheme         string `toml:"scheme"`
+	Host           string `toml:"host"`
+	Path           string `toml:"path"`
+	ClientCertFile string `toml:"clientcert"`
+	ClientKeyFile  string `toml:"clientkey"`
+	ServerCertFile string `toml:"servercert"`
+	ClientID       string `toml:"clientid"`
+	TopicQoS       int    `toml:"topicqos"`
+	Topic          string `toml:"topic"`
+}
 
-		// get a subscription channel
-		subChannel := msgBroker.Subscribe()
+type websocketsConfig struct {
+	Port int    `toml:"port"`
+	Host string `toml:"host"`
+	Path string `toml:"path"`
+}
 
-		// forward any messages from the MQTT channel and send on the
-		// websockets connection
-		for msg := range subChannel {
-			if mqttMsg, ok := msg.(MQTT.Message); ok {
-				err = c.WriteMessage(websocket.TextMessage, mqttMsg.Payload())
-				if err != nil {
-					log.Printf("error writing message %s\n", err)
-					break
-				}
-			}
-		}
+// ServerConfig holds all of the config values
+type ServerConfig struct {
+	WebSocketsConfig websocketsConfig `toml:"websockets"`
+	MQTTConfig       mqttConfig       `toml:"mqtt"`
+}
+
+// Config is the current server config
+var Config *ServerConfig
+
+// validMQTTScheme checks if the specific scheme is valid or not
+func validMQTTScheme(scheme string) bool {
+	mqttSchemes := map[string]bool{
+		"tcps": true,
+		"tcp":  true,
+		"tls":  true,
+		"ssl":  true,
+		"":     true,
 	}
+	ok, _ := mqttSchemes[scheme]
+	return ok
+}
+
+// Validate checks various properties in the config to make sure they're usable
+func (s *ServerConfig) Validate() error {
+	switch {
+	// check that ports are greater than 0
+	case s.WebSocketsConfig.Port < 1:
+		return fmt.Errorf("http port %d is invalid", s.WebSocketsConfig.Port)
+	case s.MQTTConfig.Port < 1:
+		return fmt.Errorf("mqtt port %d is invalid", s.MQTTConfig.Port)
+	case !validMQTTScheme(s.MQTTConfig.Scheme):
+		return fmt.Errorf("mqtt scheme %s is invalid", s.MQTTConfig.Scheme)
+	default:
+		return nil
+	}
+}
+
+// MarshalTOML marshals the config into bytes
+func (s *ServerConfig) MarshalTOML() ([]byte, error) {
+	return toml.Marshal(*s)
+}
+
+// UnmarshalTOML marshals the config into bytes
+func (s *ServerConfig) UnmarshalTOML(bytes []byte) error {
+	return toml.Unmarshal(bytes, s)
+}
+
+// SetDefault sets default values for the config
+func (s *ServerConfig) SetDefault() error {
+	s.WebSocketsConfig.Port = 3000
+	s.WebSocketsConfig.Host = "0.0.0.0"
+	s.WebSocketsConfig.Path = "/"
+	s.MQTTConfig.Port = 1883
+	s.MQTTConfig.Host = "localhost"
+	s.MQTTConfig.Topic = "my/topic"
+	s.MQTTConfig.TopicQoS = 1
+	return nil
+}
+
+func init() {
+	Config = &ServerConfig{}
+	Config.SetDefault()
 }
 
 // Command is the command for application management
@@ -76,31 +131,32 @@ type ConfigCmd struct {
 type UpdateConfigCmd struct{}
 
 // Execute of UpdateConfigCmd will update a config file using values from snapd / snapctl
-func (cmd *UpdateConfigCmd) Execute(args []string) (err error) {
-	// List all toml keys from the config struct using the config file specified
-	tree, err := TomlConfigTree(currentCmd.ConfigFile)
+func (cmd *UpdateConfigCmd) Execute(args []string) error {
+	err := tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
+	if err != nil {
+		return err
+	}
+
+	// Get all keys of the toml
+	keys, err := tc.TomlKeys(Config)
 	if err != nil {
 		return err
 	}
 
 	// Get all the values of these keys from snapd
-	snapValues, err := getSnapKeyValues(TomlConfigKeys(tree))
+	snapValues, err := getSnapKeyValues(keys)
 	if err != nil {
 		return err
 	}
 
-	cfg, err := SetTreeValues(snapValues, tree)
+	// Write the values into the config
+	err = tc.SetTomlConfiguratorKeyValues(snapValues, Config)
 	if err != nil {
 		return err
 	}
 
-	// Finally write out the config to the file
-	err = WriteConfig(currentCmd.ConfigFile, cfg)
-	if err != nil {
-		return err
-	}
-
-	return
+	// Finally write out the config to the config file file
+	return tc.WriteTomlConfigurator(currentCmd.ConfigFile, Config)
 }
 
 // getSnapKeyValues queries snapctl for all key values at once as JSON, and returns the corresponding values
@@ -131,7 +187,6 @@ type SetConfigCmd struct {
 }
 
 // Execute of SetConfigCmd will set config values from the command line inside the config file
-// TODO: not implemented yet
 func (cmd *SetConfigCmd) Execute(args []string) error {
 	var val interface{}
 	// assume the value is a single valid json value to parse it
@@ -139,8 +194,21 @@ func (cmd *SetConfigCmd) Execute(args []string) error {
 	if err != nil {
 		return err
 	}
-	// try to write the value into the toml file using the key
-	return WriteTomlFileKeyVal(currentCmd.ConfigFile, cmd.Args.Key, val)
+
+	// load the toml configuration so we can manipulate it
+	err = tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
+	if err != nil {
+		return err
+	}
+
+	// try to set the value into the toml file using the key
+	err = tc.SetTomlConfiguratorKeyVal(Config, cmd.Args.Key, val)
+	if err != nil {
+		return err
+	}
+
+	// finally write the configuration back out to the file
+	return tc.WriteTomlConfigurator(currentCmd.ConfigFile, Config)
 }
 
 // GetConfigCmd is a command for getting config values from the config file
@@ -151,15 +219,21 @@ type GetConfigCmd struct {
 }
 
 // Execute of GetConfigCmd will print off config values from the command line as specified in the config file
-// TODO: not implemented yet
 func (cmd *GetConfigCmd) Execute(args []string) (err error) {
-	tree, err := TomlConfigTree(currentCmd.ConfigFile)
+	// load the toml configuration so we can manipulate it
+	err = tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
+	if err != nil {
+		return err
+	}
+
+	// try to set the value into the toml file using the key
+	val, err := tc.GetTomlConfiguratorKeyVal(Config, cmd.Args.Key)
 	if err != nil {
 		return err
 	}
 
 	// Get the key from the tree
-	fmt.Println(tree.Get(cmd.Args.Key))
+	fmt.Println(val)
 	return
 }
 
@@ -176,13 +250,13 @@ func (cmd *CheckConfigCmd) Execute(args []string) (err error) {
 	if _, err = os.Stat(currentCmd.ConfigFile); os.IsNotExist(err) {
 		// file doesn't exist
 		if cmd.WriteNewFile {
-			// write out a new file then
-			return WriteConfig(currentCmd.ConfigFile, nil)
+			// write out a new file
+			return tc.WriteTomlConfigurator(currentCmd.ConfigFile, Config)
 		}
 		return fmt.Errorf("config file %s doesn't exist", currentCmd.ConfigFile)
 	}
-	// otherwise the file exists, so load it
-	return LoadConfig(currentCmd.ConfigFile)
+	// otherwise the file exists, so load it to check it
+	return tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
 }
 
 // StartCmd command for creating an application
@@ -203,7 +277,7 @@ func main() {
 // Execute of StartCmd will start running the web server
 func (cmd *StartCmd) Execute(args []string) (err error) {
 	// load the configuration for the server
-	err = LoadConfig(currentCmd.ConfigFile)
+	err = tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
 	if err != nil {
 		return err
 	}
@@ -221,7 +295,7 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 	if err != nil {
 		log.Fatalf("failed to build mqtt client: %s\n", err)
 	}
-
+	log.Println("build client")
 	// make an mqtt connection to the broker - giving up and dying after 10
 	// unsuccessful tries, every 3 seconds
 	initialConnectTries := 0
@@ -240,6 +314,8 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 		}
 	}
 
+	log.Println("client connected")
+
 	// make an internal broker to pass messages from the mqtt go routine to
 	// all of the http/websockets go routines
 	channelBroker := NewBroker()
@@ -257,6 +333,7 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 			token.Error(),
 		)
 	}
+	log.Println("client subscribed")
 
 	// listen on all interfaces, upgrading all http traffic to websockets and
 	// forwarding the clients all mqtt messages
@@ -265,6 +342,37 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 		fmt.Sprintf("%s:%d", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port),
 		nil,
 	)
+}
+
+// makeForwardMQTTMessageFunc returns a lambda function which uses the broker
+// to create a new subscription channel for the http request, and thus
+// receives all mqtt messages and forwards them to the http client (which is
+// upgraded to a websockets client)
+func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// upgrade the HTTP request to a websockets connection
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Print("upgrade:", err)
+			return
+		}
+		defer c.Close()
+
+		// get a subscription channel
+		subChannel := msgBroker.Subscribe()
+
+		// forward any messages from the MQTT channel and send on the
+		// websockets connection
+		for msg := range subChannel {
+			if mqttMsg, ok := msg.(MQTT.Message); ok {
+				err = c.WriteMessage(websocket.TextMessage, mqttMsg.Payload())
+				if err != nil {
+					log.Printf("error writing message %s\n", err)
+					break
+				}
+			}
+		}
+	}
 }
 
 // makeOnMessageFunc returns a lambda function which publishes all mqtt messages
