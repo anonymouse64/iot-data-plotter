@@ -11,7 +11,11 @@ confinement: strict
 parts:
   my-part:
     plugin: go
-    source: go-code
+    source: .
     build-snaps: [go]
     go-importpath: github.com/anonymouse64/websockets-mqtt-visualizer
     build-packages: [build-essential, gcc]
+  html-assets:
+    plugin: dump
+    source: .
+    prime: [public/*]

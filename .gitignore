@@ -4,5 +4,4 @@ go.sum
 prime/
 parts/
 stage/
-go-code/server
 configs/*.toml
