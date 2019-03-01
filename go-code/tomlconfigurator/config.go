@@ -115,6 +115,8 @@ func SetTomlConfiguratorKeyVal(t TomlConfigurator, key string, val interface{}) 
 	return loadTreeIntoTomlConfigurator(tree, t)
 }
 
+// GetTomlConfiguratorKeyVal gets the value of a specific key from the TomlConfigurator
+// and returns it as an interface{}
 func GetTomlConfiguratorKeyVal(t TomlConfigurator, key string) (interface{}, error) {
 	tree, err := tomlTree(t)
 	if err != nil {
