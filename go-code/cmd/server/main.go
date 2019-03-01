@@ -87,7 +87,7 @@ func (s *ServerConfig) MarshalTOML() ([]byte, error) {
 	return toml.Marshal(*s)
 }
 
-// UnmarshalTOML marshals the config into bytes
+// UnmarshalTOML unmarshals the toml bytes into the config
 func (s *ServerConfig) UnmarshalTOML(bytes []byte) error {
 	return toml.Unmarshal(bytes, s)
 }
