@@ -22,6 +22,13 @@ import (
 	toml "github.com/pelletier/go-toml"
 )
 
+// allowEverything is a simple helper function for development to allow
+// disabling the default websockets behavior of disallowing upgrading http
+// requests to websockets if the Host and the Origin server don't match
+func allowEverything(*http.Request) bool {
+	return true
+}
+
 var upgrader = websocket.Upgrader{}
 
 const maxInitialConnectTries = 10
@@ -43,6 +50,7 @@ type websocketsConfig struct {
 	Port int    `toml:"port"`
 	Host string `toml:"host"`
 	Path string `toml:"path"`
+	DisableCheckOrigin bool   `toml:"checkorigin"`
 }
 
 // ServerConfig holds all of the config values
@@ -334,6 +342,12 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 		)
 	}
 	log.Println("client subscribed")
+	// if we are supposed to disable checking the origin to ensure that
+	// http connections to the websockets endpoint have the same Host as
+	// Origin headers, then set that up now
+	if Config.WebSocketsConfig.DisableCheckOrigin {
+		upgrader.CheckOrigin = allowEverything
+	}
 
 	// listen on all interfaces, upgrading all http traffic to websockets and
 	// forwarding the clients all mqtt messages
