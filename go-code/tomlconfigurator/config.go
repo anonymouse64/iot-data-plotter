@@ -47,6 +47,9 @@ func WriteTomlConfigurator(file string, t TomlConfigurator) error {
 
 	// encode the config to the file
 	bytes, err := t.MarshalTOML()
+	if err != nil {
+		return err
+	}
 	return ioutil.WriteFile(file, bytes, 0644)
 }
 
