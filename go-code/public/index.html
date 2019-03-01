@@ -1,0 +1,65 @@
+<html>
+
+<head>
+    <title>Temperature &amp; Humidity live data</title>
+    <script src="javascripts/jquery-2.1.4.min.js" type="text/javascript" charset="utf-8"></script>
+    <script src="javascripts/Chart.min.js" type="text/javascript" charset="utf-8"></script>
+    <script src="javascripts/index.js" type="text/javascript" charset="utf-8"></script>
+    <link rel="stylesheet" href="https://www.iotdevice.io/static/css/styles.css?v=996ffc9">
+    <link href="stylesheets/style.css" rel="stylesheet" />
+</head>
+
+<body>
+    <header id="navigation" class="p-navigation" style="background: #5C80BC">
+        <div class="row">
+            <div class="p-navigation__banner">
+            <div class="p-navigation__logo">
+                <a class="p-navigation__link" href="https://www.iotdevice.io">
+                
+                    <img class="p-navigation__image" src="https://assets.ubuntu.com/v1/eb4e0ae3-iotdevice.svg" alt="IoT Devices Inc.">
+                    
+                    &nbsp;<h3 style="margin-top: 5px">IotDevice.io</h3>
+                    
+                
+                </a>
+            </div>
+            <a href="#navigation" class="p-navigation__toggle--open" title="menu">Menu</a>
+            <a href="#navigation-closed" class="p-navigation__toggle--close" title="close menu">Close menu</a>
+            </div>
+            <nav class="p-navigation__nav">
+            <span class="u-off-screen">
+                <a href="#main-content">Jump to main content</a>
+            </span>
+            
+                <ul class="p-navigation__links" role="menu">
+                
+                    <li class="p-navigation__link" role="menuitem">
+                    <a class="p-link--external" href="https://manage.iotdevice.io/">Management Service</a>
+                    </li>
+
+                    <li class="p-navigation__link active" role="menuitem">
+                    <a class="p-link--external" href="https://edge.iotdevice.io/">Azure IoT Edge</a>
+                    </li>
+                
+                    <li class="p-navigation__link" role="menuitem">
+                    <a class="p-link--external" href="#">Have a question?</a>
+                    </li>
+                
+                </ul>
+            
+            </nav>
+        </div>
+    </header>
+    <section id="main-content" class="p-strip--image is-shallow snapcraft-banner-background">
+        <div class="row">
+            
+        </div>
+    </section>
+    <section class="p-strip is-shallow">
+        <div class="row">
+            <canvas id="myChart" width="400" height="150"></canvas>
+        </div>
+    </section>
+</body>
+
+</html>

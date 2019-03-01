@@ -47,9 +47,10 @@ type mqttConfig struct {
 }
 
 type websocketsConfig struct {
-	Port int    `toml:"port"`
-	Host string `toml:"host"`
-	Path string `toml:"path"`
+	Port               int    `toml:"port"`
+	Host               string `toml:"host"`
+	Path               string `toml:"path"`
+	HTMLPath           string `toml:"htmlpath"`
 	DisableCheckOrigin bool   `toml:"checkorigin"`
 }
 
@@ -352,6 +353,8 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 	// listen on all interfaces, upgrading all http traffic to websockets and
 	// forwarding the clients all mqtt messages
 	http.HandleFunc(Config.WebSocketsConfig.Path, makeForwardMQTTMessageFunc(channelBroker))
+	fs := http.FileServer(http.Dir(Config.WebSocketsConfig.HTMLPath))
+	http.Handle("/", fs)
 	return http.ListenAndServe(
 		fmt.Sprintf("%s:%d", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port),
 		nil,
