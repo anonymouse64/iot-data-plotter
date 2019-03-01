@@ -120,9 +120,10 @@ func init() {
 
 // Command is the command for application management
 type Command struct {
-	Start      StartCmd  `command:"start" description:"Start the server"`
-	Config     ConfigCmd `command:"config" description:"Change or get config values"`
-	ConfigFile string    `short:"c" long:"config-file" description:"Configuration file to use" required:"yes"`
+	Start        StartCmd  `command:"start" description:"Start the server"`
+	Config       ConfigCmd `command:"config" description:"Change or get config values"`
+	ConfigFile   string    `short:"c" long:"config-file" description:"Configuration file to use" required:"yes"`
+	DebugLogging bool      `short:"d" long:"debug" description:"Turn on debug logging"`
 }
 
 // The current input command
@@ -304,9 +305,10 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 	if err != nil {
 		log.Fatalf("failed to build mqtt client: %s\n", err)
 	}
-	log.Println("build client")
-	// make an mqtt connection to the broker - giving up and dying after 10
-	// unsuccessful tries, every 3 seconds
+	if currentCmd.DebugLogging {
+		log.Println("mqtt client initialized")
+	} // make an mqtt connection to the broker - trying every 3 seconds, and
+	// giving up and dying after 10 unsuccessful tries
 	initialConnectTries := 0
 	for {
 		if token := client.Connect(); token.Wait() && token.Error() != nil {
@@ -322,8 +324,9 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 			break
 		}
 	}
-
-	log.Println("client connected")
+	if currentCmd.DebugLogging {
+		log.Println("mqtt client connected")
+	}
 
 	// make an internal broker to pass messages from the mqtt go routine to
 	// all of the http/websockets go routines
@@ -342,7 +345,11 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 			token.Error(),
 		)
 	}
-	log.Println("client subscribed")
+	if currentCmd.DebugLogging {
+		log.Printf("mqtt client subscribed to %s\n", Config.MQTTConfig.Topic)
+		log.Printf("http server listening on %s:%d\n", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port)
+	}
+
 	// if we are supposed to disable checking the origin to ensure that
 	// http connections to the websockets endpoint have the same Host as
 	// Origin headers, then set that up now
@@ -397,7 +404,9 @@ func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r
 func makeOnMessageFunc(channelBroker *Broker) MQTT.MessageHandler {
 	return func(client MQTT.Client, msg MQTT.Message) {
 		opts := client.OptionsReader()
-		log.Printf("client %s got message %s\n", opts.ClientID(), string(msg.Payload()))
+		if currentCmd.DebugLogging {
+			log.Printf("client %s got message %s\n", opts.ClientID(), string(msg.Payload()))
+		}
 		channelBroker.Publish(msg)
 	}
 }
