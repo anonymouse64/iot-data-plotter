@@ -40,6 +40,8 @@ type mqttConfig struct {
 	Path           string `toml:"path"`
 	ClientCertFile string `toml:"clientcert"`
 	ClientKeyFile  string `toml:"clientkey"`
+	ClientUsername string `toml:"username"`
+	ClientPassword string `toml:"password"`
 	ServerCertFile string `toml:"servercert"`
 	ClientID       string `toml:"clientid"`
 	TopicQoS       int    `toml:"topicqos"`
@@ -506,6 +508,14 @@ func buildMQTTClient(config mqttConfig) (MQTT.Client, error) {
 	default:
 		// somehow got an invalid tls configuration
 		return nil, fmt.Errorf("invalid mqtt scheme %s", config.Scheme)
+	}
+
+	// set the username + password if it's set in the config
+	if config.ClientUsername != "" {
+		connOpts.SetUsername(config.ClientUsername)
+		if config.ClientPassword != "" {
+			connOpts.SetPassword(config.ClientPassword)
+		}
 	}
 
 	// build the broker URL and add that
