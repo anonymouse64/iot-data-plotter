@@ -34,18 +34,18 @@ var upgrader = websocket.Upgrader{}
 const maxInitialConnectTries = 10
 
 type mqttConfig struct {
-	Port           int    `toml:"port"`
-	Scheme         string `toml:"scheme"`
-	Host           string `toml:"host"`
-	Path           string `toml:"path"`
-	ClientCertFile string `toml:"clientcert"`
-	ClientKeyFile  string `toml:"clientkey"`
-	ClientUsername string `toml:"username"`
-	ClientPassword string `toml:"password"`
-	ServerCertFile string `toml:"servercert"`
-	ClientID       string `toml:"clientid"`
-	TopicQoS       int    `toml:"topicqos"`
-	Topic          string `toml:"topic"`
+	Port              int    `toml:"port"`
+	Scheme            string `toml:"scheme"`
+	Host              string `toml:"host"`
+	Path              string `toml:"path"`
+	ClientCertFile    string `toml:"clientcert"`
+	ClientKeyFile     string `toml:"clientkey"`
+	ClientUsername    string `toml:"username"`
+	ClientPassword    string `toml:"password"`
+	ServerCertPEMFile string `toml:"serverpemcert"`
+	ClientID          string `toml:"clientid"`
+	TopicQoS          int    `toml:"topicqos"`
+	Topic             string `toml:"topic"`
 }
 
 type websocketsConfig struct {
@@ -493,10 +493,10 @@ func buildMQTTClient(config mqttConfig) (MQTT.Client, error) {
 		}
 
 		// check if there's an additional server cert to use for verification
-		if config.ServerCertFile != "" {
-			brokerCACert, err := ioutil.ReadFile(config.ServerCertFile)
+		if config.ServerCertPEMFile != "" {
+			brokerCACert, err := ioutil.ReadFile(config.ServerCertPEMFile)
 			if err != nil {
-				return nil, fmt.Errorf("couldn't open broker ca cert file at %s: %v", config.ServerCertFile, err)
+				return nil, fmt.Errorf("couldn't open broker ca cert file at %s: %v", config.ServerCertPEMFile, err)
 			}
 
 			certPool := x509.NewCertPool()
