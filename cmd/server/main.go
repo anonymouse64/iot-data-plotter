@@ -387,14 +387,14 @@ func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r
 		// get a subscription channel
 		subChannel := msgBroker.Subscribe()
 
-		// forward any messages from the MQTT channel and send on the
+		// forward any messages from the channel and send on the
 		// websockets connection, assuming JSON content and adding a current
 		// timestamp
 		for msg := range subChannel {
-			if mqttMsg, ok := msg.(MQTT.Message); ok {
-				// get the MQTT message payload as JSON
+			if msgPayload, ok := msg.([]byte); ok {
+				// get the message payload as JSON
 				msgObj := make(map[string]interface{})
-				err = json.Unmarshal(mqttMsg.Payload(), &msgObj)
+				err = json.Unmarshal(msgPayload, &msgObj)
 				if err != nil {
 					// invalid message, drop it
 					log.Printf("error parsing json message: %v\n", err)
@@ -417,6 +417,8 @@ func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r
 					log.Printf("error writing message %s\n", err)
 					break
 				}
+			} else {
+				log.Printf("error, invalid message sent on internal broker channel: %v\n", msg)
 			}
 		}
 	}
@@ -430,7 +432,7 @@ func makeOnMessageFunc(channelBroker *Broker) MQTT.MessageHandler {
 		if currentCmd.DebugLogging {
 			log.Printf("client %s got message %s\n", opts.ClientID(), string(msg.Payload()))
 		}
-		channelBroker.Publish(msg)
+		channelBroker.Publish(msg.Payload())
 	}
 }
 
