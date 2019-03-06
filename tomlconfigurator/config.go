@@ -10,7 +10,8 @@ import (
 )
 
 // TomlConfigurator is an interface that makes it easy to handle configuration
-// files, including getting specific keys,
+// files, including getting + setting specific keys from a command line app in
+// a generic way using reflection, writing/reading toml files, etc.
 type TomlConfigurator interface {
 	SetDefault() error
 	MarshalTOML() ([]byte, error)
@@ -180,7 +181,13 @@ func recurseLeaves(tree *toml.Tree, prefix string, leaves *[]string) {
 		if subtree, ok := branch.(*toml.Tree); !ok {
 			// This branch is a leaf - add it to the list of leaves
 			leavesSlice := *leaves
-			*leaves = append(leavesSlice, prefix+"."+branchName)
+			// if this is the initial call, with prefix as "", then
+			// don't add the prefix
+			if prefix == "" {
+				*leaves = append(leavesSlice, branchName)
+			} else {
+				*leaves = append(leavesSlice, prefix+"."+branchName)
+			}
 		} else {
 			// This branch has more leaves - recurse into it
 			if prefix == "" {
