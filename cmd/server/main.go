@@ -65,7 +65,7 @@ type ServerConfig struct {
 // Config is the current server config
 var Config *ServerConfig
 
-// validMQTTScheme checks if the specific scheme is valid or not
+// validMQTTScheme checks if the scheme is supported/valid
 func validMQTTScheme(scheme string) bool {
 	mqttSchemes := map[string]bool{
 		"tcps": true,
@@ -103,7 +103,8 @@ func (s *ServerConfig) UnmarshalTOML(bytes []byte) error {
 	return toml.Unmarshal(bytes, s)
 }
 
-// SetDefault sets default values for the config
+// SetDefault sets default values for the config - just use a localhost
+// mqtt broker
 func (s *ServerConfig) SetDefault() error {
 	s.WebSocketsConfig.Port = 3000
 	s.WebSocketsConfig.Host = "0.0.0.0"
