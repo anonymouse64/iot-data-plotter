@@ -344,7 +344,7 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 	// make an internal broker to pass messages from the sources go routines to
 	// all of the http/websockets go routines
 	channelBroker := NewBroker()
-	go channelBroker.Start()
+	go channelBroker.Start(context.Background())
 
 	// figure out which sources we need to forward from and setup the corresponding
 	// publisher go routines
@@ -498,7 +498,12 @@ func makeSourceForwardMessageFunc(msgBroker *Broker) func(w http.ResponseWriter,
 		defer c.Close()
 
 		// get a subscription channel
-		subChannel := msgBroker.Subscribe()
+		subChannel, err := msgBroker.Subscribe(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("error subscribing to internal broadcaster: %s\n", err)
+			return
+		}
 
 		// forward any messages from the channel and send on the
 		// websockets connection, assuming JSON content and adding a current
@@ -541,7 +546,8 @@ func makeSourceForwardMessageFunc(msgBroker *Broker) func(w http.ResponseWriter,
 // received to the broker
 func makeMQTTMessageBroadcastFunc(channelBroadcaster *Broker) MQTT.MessageHandler {
 	return func(client MQTT.Client, msg MQTT.Message) {
-		channelBroadcaster.Publish(msg.Payload())
+		// TODO: figure out how to get a context here
+		channelBroadcaster.Publish(context.TODO(), msg.Payload())
 		if currentCmd.DebugLogging {
 			opts := client.OptionsReader()
 			log.Printf("client %s got message %s\n", opts.ClientID(), string(msg.Payload()))
@@ -553,7 +559,7 @@ func makeMQTTMessageBroadcastFunc(channelBroadcaster *Broker) MQTT.MessageHandle
 // the internal broadcaster channel to all http/websockets clients
 func makeAzureAMQPMessageBroadcastFunc(channelBroadcaster *Broker, partitionID string) func(context.Context, *eventhub.Event) error {
 	return func(c context.Context, event *eventhub.Event) error {
-		channelBroadcaster.Publish(event.Data)
+		channelBroadcaster.Publish(c, event.Data)
 		if currentCmd.DebugLogging {
 			log.Printf("amqp client got message on partition %s of %s\n", partitionID, string(event.Data))
 		}
@@ -689,7 +695,7 @@ func NewBroker() *Broker {
 
 // Start starts the broker listening - note this should be run inside it's own
 // go routine
-func (b *Broker) Start() {
+func (b *Broker) Start(ctx context.Context) {
 	subs := map[chan interface{}]struct{}{}
 	for {
 		select {
@@ -707,6 +713,8 @@ func (b *Broker) Start() {
 				default:
 				}
 			}
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -718,19 +726,33 @@ func (b *Broker) Stop() {
 
 // Subscribe returns a channel that a single client can use to listen to all
 // messages published
-func (b *Broker) Subscribe() chan interface{} {
+func (b *Broker) Subscribe(ctx context.Context) (chan interface{}, error) {
 	msgCh := make(chan interface{}, 5)
-	b.subCh <- msgCh
-	return msgCh
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case b.subCh <- msgCh:
+		return msgCh, nil
+	}
 }
 
 // Publish sends a new message to be delivered to all subscribers
-func (b *Broker) Publish(msg interface{}) {
-	b.publishCh <- msg
+func (b *Broker) Publish(ctx context.Context, msg interface{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case b.publishCh <- msg:
+		return nil
+	}
 }
 
 // Unsubscribe closes and deletes a channel that was subscribed
-func (b *Broker) Unsubscribe(msgCh chan interface{}) {
-	b.unsubCh <- msgCh
-	close(msgCh)
+func (b *Broker) Unsubscribe(ctx context.Context, msgCh chan interface{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case b.unsubCh <- msgCh:
+		close(msgCh)
+		return nil
+	}
 }
