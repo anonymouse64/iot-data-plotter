@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"time"
 
+	eventhub "github.com/Azure/azure-event-hubs-go"
 	tc "github.com/anonymouse64/websockets-mqtt-visualizer/tomlconfigurator"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
@@ -56,10 +58,16 @@ type websocketsConfig struct {
 	DisableCheckOrigin bool   `toml:"checkorigin"`
 }
 
+type azureConfig struct {
+	ConnectionString string `toml:"connstring"`
+}
+
 // ServerConfig holds all of the config values
 type ServerConfig struct {
 	WebSocketsConfig websocketsConfig `toml:"websockets"`
 	MQTTConfig       mqttConfig       `toml:"mqtt"`
+	AzureAMQPConfig  azureConfig      `toml:"azureamqp"`
+	ServerSources    []string         `toml:"sources"`
 }
 
 // Config is the current server config
@@ -78,6 +86,30 @@ func validMQTTScheme(scheme string) bool {
 	return ok
 }
 
+// validServerSource checks if the source is supported/valid
+func validServerSource(source string) bool {
+	serverSources := map[string]bool{
+		"mqtt":      true,
+		"azureamqp": true,
+		"":          true,
+	}
+	ok, _ := serverSources[source]
+	return ok
+}
+
+// trueForAll is a map function - returns true only if the func applied to all
+// elements of the array returns true
+// it implements short-circuiting, returning false on the first instance of
+// checker returning false
+func trueForAll(checker func(string) bool, checkees []string) bool {
+	for _, checkee := range checkees {
+		if !checker(checkee) {
+			return false
+		}
+	}
+	return true
+}
+
 // Validate checks various properties in the config to make sure they're usable
 func (s *ServerConfig) Validate() error {
 	switch {
@@ -88,6 +120,9 @@ func (s *ServerConfig) Validate() error {
 		return fmt.Errorf("mqtt port %d is invalid", s.MQTTConfig.Port)
 	case !validMQTTScheme(s.MQTTConfig.Scheme):
 		return fmt.Errorf("mqtt scheme %s is invalid", s.MQTTConfig.Scheme)
+	case !trueForAll(validServerSource, s.ServerSources):
+		// TODO: get specific failure here for better UI
+		return fmt.Errorf("server sources has invalid element in %v", s.ServerSources)
 	default:
 		return nil
 	}
@@ -113,6 +148,7 @@ func (s *ServerConfig) SetDefault() error {
 	s.MQTTConfig.Host = "localhost"
 	s.MQTTConfig.Topic = "my/topic"
 	s.MQTTConfig.TopicQoS = 1
+	s.ServerSources = []string{"mqtt"}
 	return nil
 }
 
@@ -295,62 +331,134 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 		return err
 	}
 
+	if currentCmd.DebugLogging {
+		log.Println("debug logging turned on")
+	}
+
 	// mqtt logs for debugging the mqtt connections
 	// MQTT.DEBUG = log.New(os.Stderr, "DEBUG    ", log.Ltime)
 	// MQTT.WARN = log.New(os.Stderr, "WARNING  ", log.Ltime)
 	// MQTT.CRITICAL = log.New(os.Stderr, "CRITICAL ", log.Ltime)
 	// MQTT.ERROR = log.New(os.Stderr, "ERROR    ", log.Ltime)
 
-	// defaultCertsDir := "/snap/test-mqtts-server/current/certs"
-
-	// build an mqtt client out of the configuration
-	client, err := buildMQTTClient(Config.MQTTConfig)
-	if err != nil {
-		log.Fatalf("failed to build mqtt client: %s\n", err)
-	}
-	if currentCmd.DebugLogging {
-		log.Println("mqtt client initialized")
-	} // make an mqtt connection to the broker - trying every 3 seconds, and
-	// giving up and dying after 10 unsuccessful tries
-	initialConnectTries := 0
-	for {
-		if token := client.Connect(); token.Wait() && token.Error() != nil {
-			log.Printf("couldn't connect to broker: %v\n", token.Error())
-			log.Println("sleeping for 3 seconds")
-			time.Sleep(time.Second * 3)
-			initialConnectTries++
-			if initialConnectTries == maxInitialConnectTries {
-				log.Fatalf("failed to connect to broker after %d tries\n", initialConnectTries)
-			}
-		} else {
-			// connected successfully
-			break
-		}
-	}
-	if currentCmd.DebugLogging {
-		log.Println("mqtt client connected")
-	}
-
-	// make an internal broker to pass messages from the mqtt go routine to
+	// make an internal broker to pass messages from the sources go routines to
 	// all of the http/websockets go routines
 	channelBroker := NewBroker()
 	go channelBroker.Start()
 
-	// subscribe to the specified mqtt topic with a message handler
-	// tied to the created broker
-	if token := client.Subscribe(Config.MQTTConfig.Topic,
-		byte(Config.MQTTConfig.TopicQoS),
-		makeOnMessageFunc(channelBroker),
-	); token.Wait() && token.Error() != nil {
-		log.Fatalf(
-			"couldn't subscribe to topic %s: %v\n",
-			Config.MQTTConfig.Topic,
-			token.Error(),
-		)
-	}
-	if currentCmd.DebugLogging {
-		log.Printf("mqtt client subscribed to %s\n", Config.MQTTConfig.Topic)
-		log.Printf("http server listening on %s:%d\n", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port)
+	// figure out which sources we need to forward from and setup the corresponding
+	// publisher go routines
+	// fmt.Println(Config.ServerSources)
+	// fmt.Println(Config.AzureAMQPConfig)
+	for _, source := range Config.ServerSources {
+		if !validServerSource(source) {
+			log.Fatalf("invalid server source %s", source)
+		}
+		switch source {
+		case "azureamqp":
+			// TODO: add more connection configurations options to create the
+			// hub connection in more generic ways
+			hub, err := eventhub.NewHubFromConnectionString(Config.AzureAMQPConfig.ConnectionString)
+			if err != nil {
+				log.Fatalf("error connecting to hub with connection string: %s\n", err)
+			}
+
+			if currentCmd.DebugLogging {
+				log.Println("created aqmp hub connection")
+			}
+
+			// TODO: use better contexts appropriately here
+
+			// TODO: allow configuration of partitions from the config file
+			// for now just try to listen on all partitions
+			// get the partitions IDs from the hub's runtime info
+			runtimeInfo, err := hub.GetRuntimeInformation(context.Background())
+			if err != nil {
+				log.Fatalf("error getting runtime info for hub %v: %s\n", hub, err)
+			}
+
+			// receive messages on each partition in the background, with
+			// one go routine per partition
+			for _, partitionID := range runtimeInfo.PartitionIDs {
+				go func() {
+					// from the Receive docs:
+					// If Receive encounters an initial error setting up the connection, an error will be returned.
+					// as such, if err here is non-nil, we kill the server
+					// immediately
+					// as it means we were unable to setup the connection
+					// TODO: provide a context here that lets us handle this
+					// connection getting disconnected/failing after initial
+					// setup so it can be recovered from
+					listenHandler, err := hub.Receive(
+						context.Background(),
+						partitionID,
+						makeAzureAMQPMessageBroadcastFunc(channelBroker, partitionID),
+						eventhub.ReceiveWithLatestOffset(),
+					)
+					if err != nil {
+						log.Fatalf("error initially receiving from event hub: %v", err)
+					}
+					// err was nil, so now we wait for the listenHandler to be
+					// done, which will only ever happen if an internal error
+					// happens after the initial connection was setup
+					// as such, this error isn't immediately fatal for the server
+					// and we leave open the possibility for this connection
+					// to be re-setup, etc. later on using the contexts
+					select {
+					case <-listenHandler.Done():
+						log.Printf("listenhandler for azure amqp connection partition %s failed: %v\n", partitionID, listenHandler.Err())
+					}
+				}()
+			}
+		case "mqtt":
+			// build an mqtt client out of the configuration
+			client, err := buildMQTTClient(Config.MQTTConfig)
+			if err != nil {
+				log.Fatalf("failed to build mqtt client: %s\n", err)
+			}
+			if currentCmd.DebugLogging {
+				log.Println("mqtt client initialized")
+			}
+
+			// make an mqtt connection to the broker - trying every 3 seconds, and
+			// giving up and dying after 10 unsuccessful tries
+			initialConnectTries := 0
+			for {
+				if token := client.Connect(); token.Wait() && token.Error() != nil {
+					log.Printf("couldn't connect to broker: %v\n", token.Error())
+					log.Println("sleeping for 3 seconds")
+					time.Sleep(time.Second * 3)
+					initialConnectTries++
+					if initialConnectTries == maxInitialConnectTries {
+						log.Fatalf("failed to connect to broker after %d tries\n", initialConnectTries)
+					}
+				} else {
+					// connected successfully
+					break
+				}
+			}
+			if currentCmd.DebugLogging {
+				log.Println("mqtt client connected")
+			}
+
+			// subscribe to the specified mqtt topic with a message handler
+			// tied to the created broker
+			if token := client.Subscribe(Config.MQTTConfig.Topic,
+				byte(Config.MQTTConfig.TopicQoS),
+				makeMQTTMessageBroadcastFunc(channelBroker),
+			); token.Wait() && token.Error() != nil {
+				log.Fatalf(
+					"couldn't subscribe to topic %s: %v\n",
+					Config.MQTTConfig.Topic,
+					token.Error(),
+				)
+			}
+
+			if currentCmd.DebugLogging {
+				log.Printf("mqtt client subscribed to %s\n", Config.MQTTConfig.Topic)
+				log.Printf("http server listening on %s:%d\n", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port)
+			}
+		}
 	}
 
 	// if we are supposed to disable checking the origin to ensure that
@@ -360,22 +468,26 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 		upgrader.CheckOrigin = allowEverything
 	}
 
-	// listen on all interfaces, upgrading all http traffic to websockets and
-	// forwarding the clients all mqtt messages
-	http.HandleFunc(Config.WebSocketsConfig.Path, makeForwardMQTTMessageFunc(channelBroker))
+	// setup the handler function to forward all source messages to the
+	// websockets http clients
+	http.HandleFunc(Config.WebSocketsConfig.Path, makeSourceForwardMessageFunc(channelBroker))
+
+	// setup the static file handler on "/"
 	fs := http.FileServer(http.Dir(Config.WebSocketsConfig.HTMLPath))
 	http.Handle("/", fs)
+
+	// listen on the configured host and port
 	return http.ListenAndServe(
 		fmt.Sprintf("%s:%d", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port),
 		nil,
 	)
 }
 
-// makeForwardMQTTMessageFunc returns a lambda function which uses the broker
-// to create a new subscription channel for the http request, and thus
-// receives all mqtt messages and forwards them to the http client (which is
+// makeSourceForwardMessageFunc returns a lambda function which uses the broker
+// to create a new subscription channel for every http request, and thus
+// receives all source messages and forwards them to the http client (which is
 // upgraded to a websockets client)
-func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r *http.Request) {
+func makeSourceForwardMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// upgrade the HTTP request to a websockets connection
 		c, err := upgrader.Upgrade(w, r, nil)
@@ -425,15 +537,27 @@ func makeForwardMQTTMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r
 	}
 }
 
-// makeOnMessageFunc returns a lambda function which publishes all mqtt messages
+// makeMQTTMessageBroadcastFunc returns a lambda function which publishes all mqtt messages
 // received to the broker
-func makeOnMessageFunc(channelBroker *Broker) MQTT.MessageHandler {
+func makeMQTTMessageBroadcastFunc(channelBroadcaster *Broker) MQTT.MessageHandler {
 	return func(client MQTT.Client, msg MQTT.Message) {
-		opts := client.OptionsReader()
+		channelBroadcaster.Publish(msg.Payload())
 		if currentCmd.DebugLogging {
+			opts := client.OptionsReader()
 			log.Printf("client %s got message %s\n", opts.ClientID(), string(msg.Payload()))
 		}
-		channelBroker.Publish(msg.Payload())
+	}
+}
+
+// simple handler that publishes the Data from the event on
+// the internal broadcaster channel to all http/websockets clients
+func makeAzureAMQPMessageBroadcastFunc(channelBroadcaster *Broker, partitionID string) func(context.Context, *eventhub.Event) error {
+	return func(c context.Context, event *eventhub.Event) error {
+		channelBroadcaster.Publish(event.Data)
+		if currentCmd.DebugLogging {
+			log.Printf("amqp client got message on partition %s of %s\n", partitionID, string(event.Data))
+		}
+		return nil
 	}
 }
 
