@@ -110,19 +110,32 @@ func trueForAll(checker func(string) bool, checkees []string) bool {
 	return true
 }
 
+// sliceContainsString is a helper function to check if a given string is in a
+// list of strings
+func sliceContainsString(slice []string, theString string) bool {
+	for _, s := range slice {
+		if s == theString {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate checks various properties in the config to make sure they're usable
 func (s *ServerConfig) Validate() error {
 	switch {
-	// check that ports are greater than 0
-	case s.WebSocketsConfig.Port < 1:
-		return fmt.Errorf("http port %d is invalid", s.WebSocketsConfig.Port)
-	case s.MQTTConfig.Port < 1:
-		return fmt.Errorf("mqtt port %d is invalid", s.MQTTConfig.Port)
-	case !validMQTTScheme(s.MQTTConfig.Scheme):
-		return fmt.Errorf("mqtt scheme %s is invalid", s.MQTTConfig.Scheme)
 	case !trueForAll(validServerSource, s.ServerSources):
 		// TODO: get specific failure here for better UI
 		return fmt.Errorf("server sources has invalid element in %v", s.ServerSources)
+	// check that ports are greater than 0
+	case s.WebSocketsConfig.Port < 1:
+		return fmt.Errorf("http port %d is invalid", s.WebSocketsConfig.Port)
+	case sliceContainsString(s.ServerSources, "mqtt") && s.MQTTConfig.Port < 1:
+		return fmt.Errorf("mqtt port %d is invalid", s.MQTTConfig.Port)
+	case sliceContainsString(s.ServerSources, "mqtt") && !validMQTTScheme(s.MQTTConfig.Scheme):
+		return fmt.Errorf("mqtt scheme %s is invalid", s.MQTTConfig.Scheme)
+	case sliceContainsString(s.ServerSources, "azureamqp") && s.AzureAMQPConfig.ConnectionString != "":
+		return fmt.Errorf("azure event hub connection string must be specified to use with source \"azureamqp\"")
 	default:
 		return nil
 	}
