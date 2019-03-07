@@ -7,8 +7,8 @@ $(document).ready(function () {
     datasets: [
       {
         fill: false,
-        label: 'Temperature',
-        yAxisID: 'Temperature',
+        label: '{{.LeftLabel}}',
+        yAxisID: '{{.LeftLabel}}',
         borderColor: "rgba(255, 204, 0, 1)",
         pointBoarderColor: "rgba(255, 204, 0, 1)",
         backgroundColor: "rgba(255, 204, 0, 0.4)",
@@ -18,8 +18,8 @@ $(document).ready(function () {
       },
       {
         fill: false,
-        label: 'Humidity',
-        yAxisID: 'Humidity',
+        label: '{{.RightLabel}}',
+        yAxisID: '{{.RightLabel}}',
         borderColor: "rgba(24, 120, 240, 1)",
         pointBoarderColor: "rgba(24, 120, 240, 1)",
         backgroundColor: "rgba(24, 120, 240, 0.4)",
@@ -33,23 +33,23 @@ $(document).ready(function () {
   var basicOption = {
     title: {
       display: true,
-      text: 'Azure Temperature & Humidity Data',
+      text: '{{.GraphLabel}}',
       fontSize: 36
     },
     scales: {
       yAxes: [{
-        id: 'Temperature',
+        id: '{{.LeftLabel}}',
         type: 'linear',
         scaleLabel: {
-          labelString: 'Temperature(C)',
+          labelString: '{{.LeftAxisLabel}}',
           display: true
         },
         position: 'left',
       }, {
-          id: 'Humidity',
+          id: '{{.RightLabel}}',
           type: 'linear',
           scaleLabel: {
-            labelString: 'Humidity(%)',
+            labelString: '{{.RightAxisLabel}}',
             display: true
           },
           position: 'right'
@@ -67,7 +67,9 @@ $(document).ready(function () {
     options: basicOption
   });
 
-  var ws = new WebSocket('ws://' + location.host + "/data");
+  {{/* if scheme is meant to be secure, then wss will be used, otherwise ws */}}
+  var ws = new WebSocket("{{.WebsocketsScheme}}"+ location.host + "/data");
+    
   ws.onopen = function () {
     console.log('Successfully connect WebSocket');
   }
@@ -75,11 +77,11 @@ $(document).ready(function () {
     console.log('receive message' + message.data);
     try {
       var obj = JSON.parse(message.data);
-      if(!obj.time || !obj.ambient.temperature) {
+      if(!obj.time || !obj.{{.LeftJSKey}}) {
         return;
       }
       timeData.push(obj.time);
-      temperatureData.push(obj.ambient.temperature);
+      temperatureData.push(obj.{{.LeftJSKey}});
       // only keep no more than 50 points in the line chart
       const maxLen = 50;
       var len = timeData.length;
@@ -88,8 +90,8 @@ $(document).ready(function () {
         temperatureData.shift();
       }
 
-      if (obj.ambient.humidity) {
-        humidityData.push(obj.ambient.humidity);
+      if (obj.{{.RightJSKey}}) {
+        humidityData.push(obj.{{.RightJSKey}});
       }
       if (humidityData.length > maxLen) {
         humidityData.shift();

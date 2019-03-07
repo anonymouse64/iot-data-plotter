@@ -6,11 +6,13 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	eventhub "github.com/Azure/azure-event-hubs-go"
@@ -50,12 +52,22 @@ type mqttConfig struct {
 	Topic             string `toml:"topic"`
 }
 
+type dataGraphConfig struct {
+	Label     string `toml:"label"`
+	AxisLabel string `toml:"axislabel"`
+	Key       string `toml:"key"`
+}
+
 type websocketsConfig struct {
-	Port               int    `toml:"port"`
-	Host               string `toml:"host"`
-	Path               string `toml:"path"`
-	HTMLPath           string `toml:"htmlpath"`
-	DisableCheckOrigin bool   `toml:"checkorigin"`
+	Port                 int             `toml:"port"`
+	Host                 string          `toml:"host"`
+	Path                 string          `toml:"path"`
+	HTMLPath             string          `toml:"htmlpath"`
+	DisableCheckOrigin   bool            `toml:"checkorigin"`
+	WebSocketsInsecureJS bool            `toml:"insecurews"`
+	RightData            dataGraphConfig `toml:"rightdata"`
+	LeftData             dataGraphConfig `toml:"leftdata"`
+	GraphLabel           string          `toml:"graphlabel"`
 }
 
 type azureConfig struct {
@@ -121,7 +133,7 @@ func sliceContainsString(slice []string, theString string) bool {
 	return false
 }
 
-// Validate checks various properties in the config to make sure they're usable
+// Validate checks various properties in the config to make sure they're correct
 func (s *ServerConfig) Validate() error {
 	switch {
 	case !trueForAll(validServerSource, s.ServerSources):
@@ -134,7 +146,7 @@ func (s *ServerConfig) Validate() error {
 		return fmt.Errorf("mqtt port %d is invalid", s.MQTTConfig.Port)
 	case sliceContainsString(s.ServerSources, "mqtt") && !validMQTTScheme(s.MQTTConfig.Scheme):
 		return fmt.Errorf("mqtt scheme %s is invalid", s.MQTTConfig.Scheme)
-	case sliceContainsString(s.ServerSources, "azureamqp") && s.AzureAMQPConfig.ConnectionString != "":
+	case sliceContainsString(s.ServerSources, "azureamqp") && s.AzureAMQPConfig.ConnectionString == "":
 		return fmt.Errorf("azure event hub connection string must be specified to use with source \"azureamqp\"")
 	default:
 		return nil
@@ -157,6 +169,16 @@ func (s *ServerConfig) SetDefault() error {
 	s.WebSocketsConfig.Port = 3000
 	s.WebSocketsConfig.Host = "0.0.0.0"
 	s.WebSocketsConfig.Path = "/"
+	s.WebSocketsConfig.RightData = dataGraphConfig{
+		Label:     "Ambient Humidity",
+		AxisLabel: "Humidity (%)",
+		Key:       "ambient.humidity",
+	}
+	s.WebSocketsConfig.LeftData = dataGraphConfig{
+		Label:     "Ambient Temperature",
+		AxisLabel: "Temperature (C)",
+		Key:       "ambient.temperature",
+	}
 	s.MQTTConfig.Port = 1883
 	s.MQTTConfig.Host = "localhost"
 	s.MQTTConfig.Topic = "my/topic"
@@ -485,15 +507,79 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 	// websockets http clients
 	http.HandleFunc(Config.WebSocketsConfig.Path, makeSourceForwardMessageFunc(channelBroker))
 
-	// setup the static file handler on "/"
-	fs := http.FileServer(http.Dir(Config.WebSocketsConfig.HTMLPath))
-	http.Handle("/", fs)
+	// handle the index.js file specifically so that we can generate the
+	// template of it
+	http.HandleFunc("/javascripts/index.js", serveJSTemplate)
+	// all other files are statically generated
+	http.Handle("/", http.FileServer(http.Dir(Config.WebSocketsConfig.HTMLPath)))
 
 	// listen on the configured host and port
 	return http.ListenAndServe(
 		fmt.Sprintf("%s:%d", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port),
 		nil,
 	)
+}
+
+type tmplStruct struct {
+	WebsocketsScheme string
+	RightJSKey       string
+	LeftJSKey        string
+	RightLabel       string
+	LeftLabel        string
+	RightAxisLabel   string
+	LeftAxisLabel    string
+	GraphLabel       string
+}
+
+// serveJSTemplate reads the index.js file as a template and generates specific
+// javascript values for the graph handling using the config file
+func serveJSTemplate(w http.ResponseWriter, r *http.Request) {
+	fp := filepath.Join("templates", filepath.Clean(r.URL.Path))
+	// Return a 404 if the template doesn't exist
+	info, err := os.Stat(fp)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+			return
+		}
+	}
+
+	// Return a 404 if the request is for a directory
+	if info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+
+	tmpl, err := template.ParseFiles(fp)
+	if err != nil {
+		// Log the detailed error
+		log.Println(err.Error())
+		// Return a generic "Internal Server Error" message
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// copy config settings into the struct
+	tmplData := tmplStruct{
+		RightJSKey:     Config.WebSocketsConfig.RightData.Key,
+		LeftJSKey:      Config.WebSocketsConfig.LeftData.Key,
+		RightLabel:     Config.WebSocketsConfig.RightData.Label,
+		LeftLabel:      Config.WebSocketsConfig.LeftData.Label,
+		RightAxisLabel: Config.WebSocketsConfig.RightData.AxisLabel,
+		LeftAxisLabel:  Config.WebSocketsConfig.LeftData.AxisLabel,
+		GraphLabel:     Config.WebSocketsConfig.GraphLabel,
+	}
+
+	if Config.WebSocketsConfig.WebSocketsInsecureJS {
+		tmplData.WebsocketsScheme = "ws://"
+	} else {
+		tmplData.WebsocketsScheme = "wss://"
+	}
+
+	if err := tmpl.Execute(w, tmplData); err != nil {
+		log.Println(err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // makeSourceForwardMessageFunc returns a lambda function which uses the broker
