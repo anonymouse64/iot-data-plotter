@@ -9,13 +9,25 @@ grade: stable
 confinement: strict
 
 parts:
-  my-part:
-    plugin: go
+  server:
+    plugin: dump
     source: .
-    build-snaps: [go]
-    go-importpath: github.com/anonymouse64/websockets-mqtt-visualizer
     build-packages: [build-essential, gcc]
+    build-snaps: [go]
+    override-build: |
+      mkdir -p $SNAPCRAFT_PART_INSTALL/bin
+      case $SNAPCRAFT_ARCH_TRIPLET in
+        arm-linux-*)
+          export GOARCH=arm
+          export GOARM=7
+          ;;
+        x86_64*)
+          export GOARCH=amd64
+          ;;
+        # TODO add other arches
+      esac
+      GO111MODULE=on go build -o $SNAPCRAFT_PART_INSTALL/bin/server cmd/server/main.go
   html-assets:
     plugin: dump
     source: .
-    prime: [public/*]
+    prime: [static/*, templates/*]
