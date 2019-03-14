@@ -27,22 +27,13 @@ import (
 	"github.com/pkg/errors"
 )
 
-// allowEverything is a simple helper function for development to allow
-// disabling the default websockets behavior of disallowing upgrading http
-// requests to websockets if the Host and the Origin server don't match
-func allowEverything(*http.Request) bool {
-	return true
-}
-
-var upgrader = websocket.Upgrader{}
-
-const maxInitialConnectTries = 10
-
+// for configuring a mqtt data source
 type mqttConfig struct {
 	Port              int    `toml:"port"`
 	Scheme            string `toml:"scheme"`
 	Host              string `toml:"host"`
 	Path              string `toml:"path"`
+	MaxConnectTries   int    `toml:"maxconntries"`
 	ClientCertFile    string `toml:"clientcert"`
 	ClientKeyFile     string `toml:"clientkey"`
 	ClientUsername    string `toml:"username"`
@@ -60,16 +51,13 @@ type dataGraphConfig struct {
 	Key       string `toml:"key"`
 }
 
-type websocketsConfig struct {
-	Port                 int             `toml:"port"`
-	Host                 string          `toml:"host"`
-	Path                 string          `toml:"path"`
-	HTMLPath             string          `toml:"htmlpath"`
-	DisableCheckOrigin   bool            `toml:"checkorigin"`
-	WebSocketsInsecureJS bool            `toml:"insecurews"`
-	RightData            dataGraphConfig `toml:"rightdata"`
-	LeftData             dataGraphConfig `toml:"leftdata"`
-	GraphLabel           string          `toml:"graphlabel"`
+// for the overall http server configuration
+type httpServerConfig struct {
+	Port                 int    `toml:"port"`
+	Host                 string `toml:"host"`
+	HTMLAssetPath        string `toml:"htmlassetpath"`
+	DisableCheckOrigin   bool   `toml:"disablecheckorigin"`
+	WebSocketsInsecureJS bool   `toml:"insecurews"`
 }
 
 // for configuring azure amqp event hub data source
@@ -77,12 +65,27 @@ type azureConfig struct {
 	ConnectionString string `toml:"connstring"`
 }
 
-// ServerConfig holds all of the config values
+// a data source to be fed into the webpage visualization
+// note that it's not valid for both of these keys to be set simultaneously
+// only one of them should be defined at a time
+type dataSource struct {
+	MQTTConfig      mqttConfig  `toml:"mqtt"`
+	AzureAMQPConfig azureConfig `toml:"azureamqp"`
+}
+
+// a server webpage visualizing some data
+type dataPage struct {
+	DataSources map[string]dataSource `toml:"data"`
+	HTTPPath    string                `toml:"httppath"`
+	RightData   dataGraphConfig       `toml:"rightdata"`
+	LeftData    dataGraphConfig       `toml:"leftdata"`
+	GraphLabel  string                `toml:"graphlabel"`
+}
+
+// ServerConfig holds all of the config values for this server
 type ServerConfig struct {
-	WebSocketsConfig websocketsConfig `toml:"websockets"`
-	MQTTConfig       mqttConfig       `toml:"mqtt"`
-	AzureAMQPConfig  azureConfig      `toml:"azureamqp"`
-	ServerSources    []string         `toml:"sources"`
+	HTTPServerConfig httpServerConfig `toml:"httpserver"`
+	DataPages        []dataPage       `toml:"pages"`
 }
 
 // Config is the current server config
@@ -125,35 +128,48 @@ func trueForAll(checker func(string) bool, checkees []string) bool {
 	return true
 }
 
-// sliceContainsString is a helper function to check if a given string is in a
-// list of strings
-func sliceContainsString(slice []string, theString string) bool {
-	for _, s := range slice {
-		if s == theString {
+// copied from https://stackoverflow.com/a/15323988/10102404
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
 			return true
 		}
 	}
 	return false
 }
 
-// Validate checks various properties in the config to make sure they're correct
+// Validate checks various properties in the config to make sure they're
+// correct
 func (s *ServerConfig) Validate() error {
-	switch {
-	case !trueForAll(validServerSource, s.ServerSources):
-		// TODO: get specific failure here for better UI
-		return fmt.Errorf("server sources has invalid element in %v", s.ServerSources)
-	// check that ports are greater than 0
-	case s.WebSocketsConfig.Port < 1:
-		return fmt.Errorf("http port %d is invalid", s.WebSocketsConfig.Port)
-	case sliceContainsString(s.ServerSources, "mqtt") && s.MQTTConfig.Port < 1:
-		return fmt.Errorf("mqtt port %d is invalid", s.MQTTConfig.Port)
-	case sliceContainsString(s.ServerSources, "mqtt") && !validMQTTScheme(s.MQTTConfig.Scheme):
-		return fmt.Errorf("mqtt scheme %s is invalid", s.MQTTConfig.Scheme)
-	case sliceContainsString(s.ServerSources, "azureamqp") && s.AzureAMQPConfig.ConnectionString == "":
-		return fmt.Errorf("azure event hub connection string must be specified to use with source \"azureamqp\"")
-	default:
-		return nil
+	// validate all the data pages
+	for _, page := range s.DataPages {
+		for sourceName, source := range page.DataSources {
+			if !stringInSlice(sourceName, []string{"mqtt", "azureamqp"}) {
+				return fmt.Errorf("invalid source name %s for data page %s", sourceName, page)
+			}
+			switch sourceName {
+			case "mqtt":
+				switch {
+				case source.MQTTConfig.Port < 1:
+					return fmt.Errorf("mqtt port %d is invalid", source.MQTTConfig.Port)
+				case !validMQTTScheme(source.MQTTConfig.Scheme):
+					return fmt.Errorf("mqtt scheme %s is invalid", source.MQTTConfig.Scheme)
+				}
+			case "azureamqp":
+				switch {
+				case source.AzureAMQPConfig.ConnectionString == "":
+					return fmt.Errorf("azure event hub connection string must be specified to use with source \"azureamqp\"")
+				}
+			}
+		}
 	}
+
+	// generic httpserver config checks
+	switch {
+	case s.HTTPServerConfig.Port < 1:
+		return fmt.Errorf("http port %d is invalid", s.HTTPServerConfig.Port)
+	}
+	return nil
 }
 
 // MarshalTOML marshals the config into bytes
@@ -169,24 +185,36 @@ func (s *ServerConfig) UnmarshalTOML(bytes []byte) error {
 // SetDefault sets default values for the config - just use a localhost
 // mqtt broker
 func (s *ServerConfig) SetDefault() error {
-	s.WebSocketsConfig.Port = 3000
-	s.WebSocketsConfig.Host = "0.0.0.0"
-	s.WebSocketsConfig.Path = "/"
-	s.WebSocketsConfig.RightData = dataGraphConfig{
-		Label:     "Ambient Humidity",
-		AxisLabel: "Humidity (%)",
-		Key:       "ambient.humidity",
+	s.HTTPServerConfig.Port = 3000
+	s.HTTPServerConfig.Host = "127.0.0.1"
+	s.HTTPServerConfig.HTMLAssetPath = "static"
+
+	s.DataPages = []dataPage{
+		dataPage{
+			DataSources: map[string]dataSource{
+				"mqtt": dataSource{
+					MQTTConfig: mqttConfig{
+						Port:     1883,
+						Host:     "localhost",
+						Topic:    "my/topic",
+						TopicQoS: 1,
+					},
+				},
+			},
+			HTTPPath: "",
+			RightData: dataGraphConfig{
+				Label:     "Ambient Humidity",
+				AxisLabel: "Humidity (%)",
+				Key:       "ambient.humidity",
+			},
+			LeftData: dataGraphConfig{
+				Label:     "Ambient Temperature",
+				AxisLabel: "Temperature (C)",
+				Key:       "ambient.temperature",
+			},
+		},
 	}
-	s.WebSocketsConfig.LeftData = dataGraphConfig{
-		Label:     "Ambient Temperature",
-		AxisLabel: "Temperature (C)",
-		Key:       "ambient.temperature",
-	}
-	s.MQTTConfig.Port = 1883
-	s.MQTTConfig.Host = "localhost"
-	s.MQTTConfig.Topic = "my/topic"
-	s.MQTTConfig.TopicQoS = 1
-	s.ServerSources = []string{"mqtt"}
+
 	return nil
 }
 
@@ -384,152 +412,187 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 		log.Println("debug logging turned on")
 	}
 
+	// helper variable for readability
+	httpConfig := Config.HTTPServerConfig
+
 	// mqtt logs for debugging the mqtt connections
 	// MQTT.DEBUG = log.New(os.Stderr, "DEBUG    ", log.Ltime)
 	// MQTT.WARN = log.New(os.Stderr, "WARNING  ", log.Ltime)
 	// MQTT.CRITICAL = log.New(os.Stderr, "CRITICAL ", log.Ltime)
 	// MQTT.ERROR = log.New(os.Stderr, "ERROR    ", log.Ltime)
 
-	// make an internal broker to pass messages from the sources go routines to
-	// all of the http/websockets go routines
-	channelBroker := NewBroker()
-	go channelBroker.Start(context.Background())
-
-	// figure out which sources we need to forward from and setup the corresponding
-	// publisher go routines
-	// fmt.Println(Config.ServerSources)
-	// fmt.Println(Config.AzureAMQPConfig)
-	for _, source := range Config.ServerSources {
-		if !validServerSource(source) {
-			log.Fatalf("invalid server source %s", source)
-		}
-		switch source {
-		case "azureamqp":
-			// TODO: add more connection configurations options to create the
-			// hub connection in more generic ways
-			hub, err := eventhub.NewHubFromConnectionString(Config.AzureAMQPConfig.ConnectionString)
-			if err != nil {
-				log.Fatalf("error connecting to hub with connection string: %s\n", err)
-			}
-
-			if currentCmd.DebugLogging {
-				log.Println("created aqmp hub connection")
-			}
-
-			// TODO: use better contexts appropriately here
-
-			// TODO: allow configuration of partitions from the config file
-			// for now just try to listen on all partitions
-			// get the partitions IDs from the hub's runtime info
-			runtimeInfo, err := hub.GetRuntimeInformation(context.Background())
-			if err != nil {
-				log.Fatalf("error getting runtime info for hub %v: %s\n", hub, err)
-			}
-
-			// receive messages on each partition in the background, with
-			// one go routine per partition
-			for _, partitionID := range runtimeInfo.PartitionIDs {
-				go func() {
-					// from the Receive docs:
-					// If Receive encounters an initial error setting up the connection, an error will be returned.
-					// as such, if err here is non-nil, we kill the server
-					// immediately
-					// as it means we were unable to setup the connection
-					// TODO: provide a context here that lets us handle this
-					// connection getting disconnected/failing after initial
-					// setup so it can be recovered from
-					listenHandler, err := hub.Receive(
-						context.Background(),
-						partitionID,
-						makeAzureAMQPMessageBroadcastFunc(channelBroker, partitionID),
-						eventhub.ReceiveWithLatestOffset(),
-					)
-					if err != nil {
-						log.Fatalf("error initially receiving from event hub: %v", err)
-					}
-					// err was nil, so now we wait for the listenHandler to be
-					// done, which will only ever happen if an internal error
-					// happens after the initial connection was setup
-					// as such, this error isn't immediately fatal for the server
-					// and we leave open the possibility for this connection
-					// to be re-setup, etc. later on using the contexts
-					select {
-					case <-listenHandler.Done():
-						log.Printf("listenhandler for azure amqp connection partition %s failed: %v\n", partitionID, listenHandler.Err())
-					}
-				}()
-			}
-		case "mqtt":
-			// build an mqtt client out of the configuration
-			client, err := buildMQTTClient(Config.MQTTConfig)
-			if err != nil {
-				log.Fatalf("failed to build mqtt client: %s\n", err)
-			}
-			if currentCmd.DebugLogging {
-				log.Println("mqtt client initialized")
-			}
-
-			// make an mqtt connection to the broker - trying every 3 seconds, and
-			// giving up and dying after 10 unsuccessful tries
-			initialConnectTries := 0
-			for {
-				if token := client.Connect(); token.Wait() && token.Error() != nil {
-					log.Printf("couldn't connect to broker: %v\n", token.Error())
-					log.Println("sleeping for 3 seconds")
-					time.Sleep(time.Second * 3)
-					initialConnectTries++
-					if initialConnectTries == maxInitialConnectTries {
-						log.Fatalf("failed to connect to broker after %d tries\n", initialConnectTries)
-					}
-				} else {
-					// connected successfully
-					break
-				}
-			}
-			if currentCmd.DebugLogging {
-				log.Println("mqtt client connected")
-			}
-
-			// subscribe to the specified mqtt topic with a message handler
-			// tied to the created broker
-			if token := client.Subscribe(Config.MQTTConfig.Topic,
-				byte(Config.MQTTConfig.TopicQoS),
-				makeMQTTMessageBroadcastFunc(channelBroker),
-			); token.Wait() && token.Error() != nil {
-				log.Fatalf(
-					"couldn't subscribe to topic %s: %v\n",
-					Config.MQTTConfig.Topic,
-					token.Error(),
-				)
-			}
-
-			if currentCmd.DebugLogging {
-				log.Printf("mqtt client subscribed to %s\n", Config.MQTTConfig.Topic)
-				log.Printf("http server listening on %s:%d\n", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port)
-			}
-		}
-	}
-
 	// if we are supposed to disable checking the origin to ensure that
 	// http connections to the websockets endpoint have the same Host as
 	// Origin headers, then set that up now
-	if Config.WebSocketsConfig.DisableCheckOrigin {
-		upgrader.CheckOrigin = allowEverything
+
+	// the http->websockets upgrader object for all connections
+	upgrader := websocket.Upgrader{}
+	if httpConfig.DisableCheckOrigin {
+		upgrader.CheckOrigin = func(*http.Request) bool {
+			return true
+		}
 	}
 
-	// setup the handler function to forward all source messages to the
-	// websockets http clients
-	http.HandleFunc(Config.WebSocketsConfig.Path, makeSourceForwardMessageFunc(channelBroker))
+	// the static http is the same for all data pages, so create it once here
+	// and assign it to all of the page paths
+	statichttpfs := http.FileServer(http.Dir(httpConfig.HTMLAssetPath))
 
-	// handle the index.js file specifically so that we can generate the
-	// template of it
-	http.HandleFunc("/javascripts/index.js", serveJSTemplate)
-	// all other files are statically generated
-	http.Handle("/", http.FileServer(http.Dir(Config.WebSocketsConfig.HTMLPath)))
+	// figure out which sources we need to forward from and setup the
+	// corresponding publisher go routines
+	fmt.Printf("%+v\n", Config)
+	for _, page := range Config.DataPages {
+		// for this data page, there is a map of source keys to data sources
+		// the source keys must match the type such that if a data source is
+		// mqtt, the key must be "mqtt" and if the source is azureamqp it
+		// must be "azureamqp" - this is because there's no way to tell for
+		// a given data source which source is supposed to be used, so we
+		// use a map to disambiguate which members of the dataSource struct
+		// to inspect and use for a given source
+
+		// for each page, make a unqiue internal broker to pass messages from
+		// the sources to all of the http/websockets go routines for this page
+		channelBroker := NewBroker()
+		go channelBroker.Start(context.Background())
+
+		for sourceName, source := range page.DataSources {
+
+			switch sourceName {
+			case "azureamqp":
+				// TODO: add more connection configurations options to create
+				// the hub connection in more generic ways
+				hub, err := eventhub.NewHubFromConnectionString(
+					source.AzureAMQPConfig.ConnectionString,
+				)
+				if err != nil {
+					log.Fatalf("error connecting to hub with connection string: %s\n", err)
+				}
+
+				if currentCmd.DebugLogging {
+					log.Println("created aqmp hub connection")
+				}
+
+				// TODO: use better contexts appropriately here
+
+				// TODO: allow configuration of partitions from the config
+				// file - for now just try to listen on all partitions
+				// get the partitions IDs from the hub's runtime info
+				runtimeInfo, err := hub.GetRuntimeInformation(context.TODO())
+				if err != nil {
+					log.Fatalf("error getting runtime info for hub %v: %s\n", hub, err)
+				}
+
+				// receive messages on each partition in the background, with
+				// one go routine per partition
+				for _, partitionID := range runtimeInfo.PartitionIDs {
+					go func() {
+						// from the Receive docs:
+						// If Receive encounters an initial error setting up
+						// the connection, an error will be returned.
+
+						// as such, if err here is non-nil, we kill the server
+						// immediately becuase we were unable to setup the
+						// connection at all
+						// TODO: provide a context here that lets us handle
+						// this connection getting disconnected/failing after
+						// initial setup so it can be recovered from
+						listenHandler, err := hub.Receive(
+							context.TODO(),
+							partitionID,
+							makeAzureAMQPMessageBroadcastFunc(channelBroker, partitionID),
+							eventhub.ReceiveWithLatestOffset(),
+						)
+						if err != nil {
+							log.Fatalf("error initially receiving from event hub: %v", err)
+						}
+						// err was nil, so now we wait for the listenHandler to be
+						// done, which will only ever happen if an internal error
+						// happens after the initial connection was setup
+						// as such, this error isn't immediately fatal for the server
+						// and we leave open the possibility for this connection
+						// to be re-setup, etc. later on using the contexts
+						select {
+						case <-listenHandler.Done():
+							log.Printf("listenhandler for azure amqp connection partition %s failed: %v\n", partitionID, listenHandler.Err())
+						}
+					}()
+				}
+			case "mqtt":
+				// build an mqtt client out of the configuration
+				client, err := buildMQTTClient(source.MQTTConfig)
+				if err != nil {
+					log.Fatalf("failed to build mqtt client: %s\n", err)
+				}
+				if currentCmd.DebugLogging {
+					log.Println("mqtt client initialized")
+				}
+
+				// make an mqtt connection to the broker - trying every 3 seconds, and
+				// giving up and dying after 10 unsuccessful tries
+				initialConnectTries := 0
+				for {
+					if token := client.Connect(); token.Wait() && token.Error() != nil {
+						log.Printf("couldn't connect to broker: %v\n", token.Error())
+						log.Println("sleeping for 3 seconds")
+						time.Sleep(time.Second * 3)
+						initialConnectTries++
+						if initialConnectTries == source.MQTTConfig.MaxConnectTries {
+							log.Fatalf("failed to connect to broker after %d tries\n", initialConnectTries)
+						}
+					} else {
+						// connected successfully
+						break
+					}
+				}
+				if currentCmd.DebugLogging {
+					opts := client.OptionsReader()
+					log.Println("mqtt client connected to %v", opts.Servers())
+				}
+
+				// subscribe to the specified mqtt topic with a message
+				// handler tied to this page's created broker
+				if token := client.Subscribe(source.MQTTConfig.Topic,
+					byte(source.MQTTConfig.TopicQoS),
+					makeMQTTMessageBroadcastFunc(channelBroker),
+				); token.Wait() && token.Error() != nil {
+					log.Fatalf(
+						"couldn't subscribe to topic %s: %v\n",
+						source.MQTTConfig.Topic,
+						token.Error(),
+					)
+				}
+
+				if currentCmd.DebugLogging {
+					log.Printf("mqtt client subscribed to %s\n", source.MQTTConfig.Topic)
+				}
+			}
+			// setup the handler function to forward all source messages to the
+			// websockets http clients
+			http.HandleFunc(
+				filepath.Join("/", page.HTTPPath, "ws"),
+				makeSourceForwardMessageFunc(channelBroker, upgrader),
+			)
+
+			// handle the index.js file for this page specifically so that we
+			// can generate the template specific to this page
+			http.HandleFunc(
+				filepath.Join("/", page.HTTPPath, "javascripts", "index.js"),
+				makeJSTemplateFunc(page, httpConfig.WebSocketsInsecureJS),
+			)
+
+			// all other files are statically generated - but note that all
+			// pages use the same common server config for the html asset path
+			// so the look is consistent
+			http.Handle(filepath.Join("/", page.HTTPPath), statichttpfs)
+
+			if currentCmd.DebugLogging {
+				log.Printf("http listener for data source %s forwarding to webpage endpoint %s\n", sourceName, page.HTTPPath)
+			}
+		}
+	}
 
 	// listen on the configured host and port
 	return http.ListenAndServe(
-		fmt.Sprintf("%s:%d", Config.WebSocketsConfig.Host, Config.WebSocketsConfig.Port),
+		fmt.Sprintf("%s:%d", httpConfig.Host, httpConfig.Port),
 		nil,
 	)
 }
@@ -549,52 +612,54 @@ type tmplStruct struct {
 
 // serveJSTemplate reads the index.js file as a template and generates specific
 // javascript values for the graph handling using the config file
-func serveJSTemplate(w http.ResponseWriter, r *http.Request) {
-	fp := filepath.Join("templates", filepath.Clean(r.URL.Path))
-	// Return a 404 if the template doesn't exist
-	info, err := os.Stat(fp)
-	if err != nil {
-		if os.IsNotExist(err) {
+func makeJSTemplateFunc(page dataPage, insecurewebsockets bool) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fp := filepath.Join("templates", filepath.Clean(r.URL.Path))
+		// Return a 404 if the template doesn't exist
+		info, err := os.Stat(fp)
+		if err != nil {
+			if os.IsNotExist(err) {
+				http.NotFound(w, r)
+				return
+			}
+		}
+
+		// Return a 404 if the request is for a directory
+		if info.IsDir() {
 			http.NotFound(w, r)
 			return
 		}
-	}
 
-	// Return a 404 if the request is for a directory
-	if info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
+		tmpl, err := template.ParseFiles(fp)
+		if err != nil {
+			// Log the detailed error
+			log.Println(err.Error())
+			// Return a generic "Internal Server Error" message
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	tmpl, err := template.ParseFiles(fp)
-	if err != nil {
-		// Log the detailed error
-		log.Println(err.Error())
-		// Return a generic "Internal Server Error" message
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+		// copy config settings into the struct
+		tmplData := tmplStruct{
+			RightJSKey:     page.RightData.Key,
+			LeftJSKey:      page.LeftData.Key,
+			RightLabel:     page.RightData.Label,
+			LeftLabel:      page.LeftData.Label,
+			RightAxisLabel: page.RightData.AxisLabel,
+			LeftAxisLabel:  page.LeftData.AxisLabel,
+			GraphLabel:     page.GraphLabel,
+		}
 
-	// copy config settings into the struct
-	tmplData := tmplStruct{
-		RightJSKey:     Config.WebSocketsConfig.RightData.Key,
-		LeftJSKey:      Config.WebSocketsConfig.LeftData.Key,
-		RightLabel:     Config.WebSocketsConfig.RightData.Label,
-		LeftLabel:      Config.WebSocketsConfig.LeftData.Label,
-		RightAxisLabel: Config.WebSocketsConfig.RightData.AxisLabel,
-		LeftAxisLabel:  Config.WebSocketsConfig.LeftData.AxisLabel,
-		GraphLabel:     Config.WebSocketsConfig.GraphLabel,
-	}
+		if insecurewebsockets {
+			tmplData.WebsocketsScheme = "ws://"
+		} else {
+			tmplData.WebsocketsScheme = "wss://"
+		}
 
-	if Config.WebSocketsConfig.WebSocketsInsecureJS {
-		tmplData.WebsocketsScheme = "ws://"
-	} else {
-		tmplData.WebsocketsScheme = "wss://"
-	}
-
-	if err := tmpl.Execute(w, tmplData); err != nil {
-		log.Println(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if err := tmpl.Execute(w, tmplData); err != nil {
+			log.Println(err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	}
 }
 
@@ -602,7 +667,7 @@ func serveJSTemplate(w http.ResponseWriter, r *http.Request) {
 // to create a new subscription channel for every http request, and thus
 // receives all source messages and forwards them to the http client (which is
 // upgraded to a websockets client)
-func makeSourceForwardMessageFunc(msgBroker *Broker) func(w http.ResponseWriter, r *http.Request) {
+func makeSourceForwardMessageFunc(msgBroker *Broker, upgrader websocket.Upgrader) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// upgrade the HTTP request to a websockets connection
 		c, err := upgrader.Upgrade(w, r, nil)
