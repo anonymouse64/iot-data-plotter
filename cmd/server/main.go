@@ -52,6 +52,7 @@ type mqttConfig struct {
 	Topic             string `toml:"topic"`
 }
 
+// for configuring the graph for a data source
 type dataGraphConfig struct {
 	Label     string `toml:"label"`
 	AxisLabel string `toml:"axislabel"`
@@ -70,6 +71,7 @@ type websocketsConfig struct {
 	GraphLabel           string          `toml:"graphlabel"`
 }
 
+// for configuring azure amqp event hub data source
 type azureConfig struct {
 	ConnectionString string `toml:"connstring"`
 }
@@ -188,6 +190,8 @@ func (s *ServerConfig) SetDefault() error {
 }
 
 func init() {
+	// initialize a default config here globally because then it simplifies
+	// the various command Execute() methods
 	Config = &ServerConfig{}
 	Config.SetDefault()
 }
@@ -203,18 +207,21 @@ type Command struct {
 // The current input command
 var currentCmd Command
 
-// ConfigCmd is for a set of commands working with the config file programmatically
+// ConfigCmd is for a set of commands working with the config file
+// programmatically
 type ConfigCmd struct {
-	Check      CheckConfigCmd  `command:"check" descripttion:"Check a configuration file"`
+	Check      CheckConfigCmd  `command:"check" description:"Check a configuration file"`
 	SnapUpdate UpdateConfigCmd `command:"update" description:"Update the configuration"`
 	Set        SetConfigCmd    `command:"set" description:"Set values in the configuration file"`
 	Get        GetConfigCmd    `command:"get" description:"Get values from the configuration file"`
 }
 
-// UpdateConfigCmd is a command for updating a config file from snapd/snapctl environment values
+// UpdateConfigCmd is a command for updating a config file from snapd/snapctl
+// environment values
 type UpdateConfigCmd struct{}
 
-// Execute of UpdateConfigCmd will update a config file using values from snapd / snapctl
+// Execute of UpdateConfigCmd will update a config file using values from
+// snapd / snapctl
 func (cmd *UpdateConfigCmd) Execute(args []string) error {
 	err := tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
 	if err != nil {
@@ -243,7 +250,8 @@ func (cmd *UpdateConfigCmd) Execute(args []string) error {
 	return tc.WriteTomlConfigurator(currentCmd.ConfigFile, Config)
 }
 
-// getSnapKeyValues queries snapctl for all key values at once as JSON, and returns the corresponding values
+// getSnapKeyValues queries snapctl for all key values at once as JSON, and
+// returns the corresponding values
 func getSnapKeyValues(keys []string) (map[string]interface{}, error) {
 	// get all values from snap at once as a json document
 	snapCmd := exec.Command("snapctl", append([]string{"get", "-d"}, keys...)...)
@@ -270,7 +278,8 @@ type SetConfigCmd struct {
 	} `positional-args:"yes" required:"yes"`
 }
 
-// Execute of SetConfigCmd will set config values from the command line inside the config file
+// Execute of SetConfigCmd will set config values from the command line inside
+//  the config file
 func (cmd *SetConfigCmd) Execute(args []string) error {
 	var val interface{}
 	// assume the value is a single valid json value to parse it
@@ -302,7 +311,8 @@ type GetConfigCmd struct {
 	} `positional-args:"yes" required:"yes"`
 }
 
-// Execute of GetConfigCmd will print off config values from the command line as specified in the config file
+// Execute of GetConfigCmd will print off config values from the command line
+// as specified in the config file
 func (cmd *GetConfigCmd) Execute(args []string) (err error) {
 	// load the toml configuration so we can manipulate it
 	err = tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
@@ -337,7 +347,10 @@ func (cmd *CheckConfigCmd) Execute(args []string) (err error) {
 			// write out a new file
 			return tc.WriteTomlConfigurator(currentCmd.ConfigFile, Config)
 		}
-		return fmt.Errorf("config file %s doesn't exist", currentCmd.ConfigFile)
+		return fmt.Errorf(
+			"config file %s doesn't exist",
+			currentCmd.ConfigFile,
+		)
 	}
 	// otherwise the file exists, so load it to check it
 	return tc.LoadTomlConfigurator(currentCmd.ConfigFile, Config)
@@ -520,6 +533,8 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 	)
 }
 
+// a simple struct for templating the javascript file which plots the data
+// in a graph
 type tmplStruct struct {
 	WebsocketsScheme string
 	RightJSKey       string
@@ -672,6 +687,8 @@ func generateRandomClientID() string {
 	uuidBytes := uuid.New()
 	encoder, err := basex.NewEncoding("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 	if err != nil {
+		// if this fails either "basex" is broken or something else is
+		// critically broken
 		panic("can't build base62 encoder for random client ID's")
 	}
 	return encoder.Encode(uuidBytes[:])
