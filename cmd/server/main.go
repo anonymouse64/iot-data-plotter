@@ -24,6 +24,7 @@ import (
 	"github.com/gorilla/websocket"
 	flags "github.com/jessevdk/go-flags"
 	toml "github.com/pelletier/go-toml"
+	"github.com/pkg/errors"
 )
 
 // allowEverything is a simple helper function for development to allow
@@ -661,7 +662,10 @@ func makeSourceForwardMessageFunc(msgBroker *Broker) func(w http.ResponseWriter,
 func makeMQTTMessageBroadcastFunc(channelBroadcaster *Broker) MQTT.MessageHandler {
 	return func(client MQTT.Client, msg MQTT.Message) {
 		// TODO: figure out how to get a context here
-		channelBroadcaster.Publish(context.TODO(), msg.Payload())
+		err := channelBroadcaster.Publish(context.TODO(), msg.Payload())
+		if err != nil {
+			log.Printf("%v\n", errors.Wrap(err, "internal broadcast publish failed"))
+		}
 		if currentCmd.DebugLogging {
 			opts := client.OptionsReader()
 			log.Printf("client %s got message %s\n", opts.ClientID(), string(msg.Payload()))
@@ -673,7 +677,10 @@ func makeMQTTMessageBroadcastFunc(channelBroadcaster *Broker) MQTT.MessageHandle
 // the internal broadcaster channel to all http/websockets clients
 func makeAzureAMQPMessageBroadcastFunc(channelBroadcaster *Broker, partitionID string) func(context.Context, *eventhub.Event) error {
 	return func(c context.Context, event *eventhub.Event) error {
-		channelBroadcaster.Publish(c, event.Data)
+		err := channelBroadcaster.Publish(c, event.Data)
+		if err != nil {
+			return errors.Wrap(err, "internal broadcast publish failed")
+		}
 		if currentCmd.DebugLogging {
 			log.Printf("amqp client got message on partition %s of %s\n", partitionID, string(event.Data))
 		}
@@ -729,12 +736,7 @@ func buildMQTTClient(config mqttConfig) (MQTT.Client, error) {
 			// get the client certificate pair and load them
 			clientCert, err := tls.LoadX509KeyPair(config.ClientCertFile, config.ClientKeyFile)
 			if err != nil {
-				return nil, fmt.Errorf(
-					"couldn't make client cert from certfile %s and keyfile %s: %v",
-					config.ClientCertFile,
-					config.ClientKeyFile,
-					err,
-				)
+				return nil, errors.Wrap(err, "load client cert + key failed")
 			}
 
 			// add the client certificate to the tls configuration
@@ -745,7 +747,7 @@ func buildMQTTClient(config mqttConfig) (MQTT.Client, error) {
 		if config.ServerCertPEMFile != "" {
 			brokerCACert, err := ioutil.ReadFile(config.ServerCertPEMFile)
 			if err != nil {
-				return nil, fmt.Errorf("couldn't open broker ca cert file at %s: %v", config.ServerCertPEMFile, err)
+				return nil, errors.Wrap(err, "open broker ca cert failed")
 			}
 
 			certPool := x509.NewCertPool()
@@ -846,7 +848,7 @@ func (b *Broker) Subscribe(ctx context.Context) (chan interface{}, error) {
 	msgCh := make(chan interface{}, 5)
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, errors.Wrap(ctx.Err(), "subscribe interrupted")
 	case b.subCh <- msgCh:
 		return msgCh, nil
 	}
@@ -856,7 +858,7 @@ func (b *Broker) Subscribe(ctx context.Context) (chan interface{}, error) {
 func (b *Broker) Publish(ctx context.Context, msg interface{}) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Wrap(ctx.Err(), "publish interrupted")
 	case b.publishCh <- msg:
 		return nil
 	}
@@ -866,7 +868,7 @@ func (b *Broker) Publish(ctx context.Context, msg interface{}) error {
 func (b *Broker) Unsubscribe(ctx context.Context, msgCh chan interface{}) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Wrap(ctx.Err(), "unsubscribe interrupted")
 	case b.unsubCh <- msgCh:
 		close(msgCh)
 		return nil
