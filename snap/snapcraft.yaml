@@ -1,12 +1,22 @@
-name: websockets-mqtt-visualizer
-version: '0.1'
-summary: Visualize MQTT data over WebSockets
+name: iot-plotter
+version: "0.1"
+summary: Visualize IoT data in a browser
 description: |
-  A web-app that visualizes data from an MQTT connection to a web clients by
-  sending the data over WebSockets directly
+  A configurable webserver that visualizes data from various IoT sources to 
+  web clients by gathering the data and then sending the data to a web browser
+  using WebSockets to live plot the data as it's sent, without a static 
+  database storing the data. 
 
 grade: stable
 confinement: strict
+
+apps:
+  server:
+    command: bin/server -c $SNAP_DATA/config.toml
+    daemon: simple
+    plugs:
+      - network
+      - network-bind
 
 parts:
   server:
