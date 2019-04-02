@@ -145,7 +145,7 @@ func (s *ServerConfig) Validate() error {
 	for _, page := range s.DataPages {
 		for sourceName, source := range page.DataSources {
 			if !stringInSlice(sourceName, []string{"mqtt", "azureamqp"}) {
-				return fmt.Errorf("invalid source name %s for data page %s", sourceName, page)
+				return fmt.Errorf("invalid source name %s for data page %v", sourceName, page)
 			}
 			switch sourceName {
 			case "mqtt":
@@ -190,9 +190,9 @@ func (s *ServerConfig) SetDefault() error {
 	s.HTTPServerConfig.HTMLAssetPath = "static"
 
 	s.DataPages = []dataPage{
-		dataPage{
+		{
 			DataSources: map[string]dataSource{
-				"mqtt": dataSource{
+				"mqtt": {
 					MQTTConfig: mqttConfig{
 						Port:     1883,
 						Host:     "localhost",
