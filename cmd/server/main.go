@@ -16,7 +16,7 @@ import (
 	"time"
 
 	eventhub "github.com/Azure/azure-event-hubs-go"
-	tc "github.com/anonymouse64/websockets-mqtt-visualizer/tomlconfigurator"
+	tc "github.com/anonymouse64/iot-data-plotter/tomlconfigurator"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 	"github.com/eknkc/basex"

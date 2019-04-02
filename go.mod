@@ -1,4 +1,4 @@
-module github.com/anonymouse64/websockets-mqtt-visualizer
+module github.com/anonymouse64/iot-data-plotter
 
 require (
 	github.com/Azure/azure-event-hubs-go v1.1.3

@@ -1,4 +1,4 @@
-name: iot-plotter
+name: iot-data-plotter
 version: "0.1"
 summary: Visualize IoT data in a browser
 description: |
