@@ -2,6 +2,7 @@ module github.com/anonymouse64/websockets-mqtt-visualizer
 
 require (
 	github.com/Azure/azure-event-hubs-go v1.1.3
+	github.com/BurntSushi/toml v0.3.1 // indirect
 	github.com/eclipse/paho.mqtt.golang v1.1.1
 	github.com/eknkc/basex v1.0.0
 	github.com/google/uuid v1.1.1

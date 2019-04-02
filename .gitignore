@@ -1,6 +1,5 @@
 *.snap
 *.bz2
-go.sum
 prime/
 parts/
 stage/
