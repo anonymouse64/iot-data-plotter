@@ -490,7 +490,7 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 						// the connection, an error will be returned.
 
 						// as such, if err here is non-nil, we kill the server
-						// immediately becuase we were unable to setup the
+						// immediately because we were unable to setup the
 						// connection at all
 						// TODO: provide a context here that lets us handle
 						// this connection getting disconnected/failing after
