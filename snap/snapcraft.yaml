@@ -1,8 +1,11 @@
 name: iot-data-plotter
+base: core18
+license: GPL-3.0
 version: "replace-me"
 version-script: |
   echo 1.0.0-$(git rev-parse --short HEAD)
-summary: Visualize IoT data in a browser
+title: IoT Data Plotter
+summary: Visualize live IoT data in a browser
 description: |
   A configurable webserver that visualizes data from various IoT sources to 
   web clients by gathering the data and then sending the data to a web browser
