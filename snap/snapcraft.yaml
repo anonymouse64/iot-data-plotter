@@ -1,5 +1,7 @@
 name: iot-data-plotter
-version: "0.1"
+version: "replace-me"
+version-script: |
+  echo 1.0.0-$(git rev-parse --short HEAD)
 summary: Visualize IoT data in a browser
 description: |
   A configurable webserver that visualizes data from various IoT sources to 
