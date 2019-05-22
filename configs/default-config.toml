@@ -1,0 +1,43 @@
+
+[httpserver]
+  disablecheckorigin = false
+  host = "127.0.0.1"
+  htmlassetpath = "static"
+  insecurews = false
+  port = 3000
+
+[[pages]]
+  graphlabel = ""
+  httppath = ""
+
+  [pages.data]
+
+    [pages.data.mqtt]
+
+      [pages.data.mqtt.azureamqp]
+        connstring = ""
+
+      [pages.data.mqtt.mqtt]
+        clientcert = ""
+        clientid = ""
+        clientkey = ""
+        host = "localhost"
+        maxconntries = 0
+        password = ""
+        path = ""
+        port = 1883
+        scheme = ""
+        serverpemcert = ""
+        topic = "my/topic"
+        topicqos = 1
+        username = ""
+
+  [pages.leftdata]
+    axislabel = "Temperature (C)"
+    key = "ambient.temperature"
+    label = "Ambient Temperature"
+
+  [pages.rightdata]
+    axislabel = "Humidity (%)"
+    key = "ambient.humidity"
+    label = "Ambient Humidity"
