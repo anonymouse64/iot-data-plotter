@@ -439,7 +439,6 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 
 	// figure out which sources we need to forward from and setup the
 	// corresponding publisher go routines
-	fmt.Printf("%+v\n", Config)
 	for _, page := range Config.DataPages {
 		// for this data page, there is a map of source keys to data sources
 		// the source keys must match the type such that if a data source is
