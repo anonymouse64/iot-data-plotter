@@ -18,6 +18,7 @@ confinement: strict
 apps:
   server:
     command: bin/server -c $SNAP_DATA/config.toml
+    adapter: none
     daemon: simple
     plugs:
       - network
@@ -27,13 +28,14 @@ parts:
   server:
     plugin: dump
     source: .
-    build-packages: [build-essential, gcc]
+    build-packages: [build-essential, git, gcc]
     build-snaps: [go]
     override-build: |
       mkdir -p $SNAPCRAFT_PART_INSTALL/bin
       case $SNAPCRAFT_ARCH_TRIPLET in
         arm-linux-*)
           export GOARCH=arm
+          # snaps only run on ARMv7+
           export GOARM=7
           ;;
         x86_64*)
@@ -41,7 +43,8 @@ parts:
           ;;
         # TODO add other arches
       esac
-      GO111MODULE=on go build -o $SNAPCRAFT_PART_INSTALL/bin/server cmd/server/main.go
+      # build without cgo for minimal linkage
+      GO111MODULE=on CGO_ENABLED=0 go build -o $SNAPCRAFT_PART_INSTALL/bin/server cmd/server/main.go
   html-assets:
     plugin: dump
     source: .
