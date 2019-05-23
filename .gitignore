@@ -4,6 +4,6 @@ prime/
 parts/
 stage/
 configs/*.toml
-!configs/default-config.toml
+!configs/config.toml
 snap/\.snapcraft/
 /server

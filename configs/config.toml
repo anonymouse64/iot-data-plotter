@@ -14,9 +14,6 @@
 
     [pages.data.mqtt]
 
-      [pages.data.mqtt.azureamqp]
-        connstring = ""
-
       [pages.data.mqtt.mqtt]
         clientcert = ""
         clientid = ""
