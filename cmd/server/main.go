@@ -544,7 +544,7 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 				}
 				if currentCmd.DebugLogging {
 					opts := client.OptionsReader()
-					log.Println("mqtt client connected to %v", opts.Servers())
+					log.Printf("mqtt client connected to %v", opts.Servers())
 				}
 
 				// subscribe to the specified mqtt topic with a message
