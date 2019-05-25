@@ -56,6 +56,7 @@ type httpServerConfig struct {
 	Port                 int    `toml:"port"`
 	Host                 string `toml:"host"`
 	HTMLAssetPath        string `toml:"htmlassetpath"`
+	HTMLTemplatePath     string `toml:"htmltemplatepath"`
 	DisableCheckOrigin   bool   `toml:"disablecheckorigin"`
 	WebSocketsInsecureJS bool   `toml:"insecurews"`
 }
@@ -188,6 +189,7 @@ func (s *ServerConfig) SetDefault() error {
 	s.HTTPServerConfig.Port = 3000
 	s.HTTPServerConfig.Host = "127.0.0.1"
 	s.HTTPServerConfig.HTMLAssetPath = "static"
+	s.HTTPServerConfig.HTMLTemplatePath = "templates"
 
 	s.DataPages = []dataPage{
 		{
@@ -566,22 +568,49 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 			}
 			// setup the handler function to forward all source messages to the
 			// websockets http clients
-			http.HandleFunc(
+			http.Handle(
 				filepath.Join("/", page.HTTPPath, "ws"),
 				makeSourceForwardMessageFunc(channelBroker, upgrader),
 			)
 
 			// handle the index.js file for this page specifically so that we
 			// can generate the template specific to this page
-			http.HandleFunc(
+			http.Handle(
 				filepath.Join("/", page.HTTPPath, "javascripts", "index.js"),
-				makeJSTemplateFunc(page, httpConfig.WebSocketsInsecureJS),
+				middlewareLogger(
+					http.StripPrefix(
+						"/"+page.HTTPPath,
+						makeJSTemplateFunc(
+							httpConfig.HTMLTemplatePath,
+							page,
+							httpConfig.WebSocketsInsecureJS,
+						),
+					),
+					"index.js template",
+				),
 			)
 
-			// all other files are statically generated - but note that all
-			// pages use the same common server config for the html asset path
-			// so the look is consistent
-			http.Handle(filepath.Join("/", page.HTTPPath), statichttpfs)
+			// handle all other files underneath the HTTPPath from the static
+			// server
+			// if the HTTPPath is not the empty string we need to specify the
+			// add a trailing slash to it
+			// this is necessary because filepath.Join always strips the last
+			// "/"
+			staticFSPattern := filepath.Join("/", page.HTTPPath)
+			if page.HTTPPath != "" {
+				staticFSPattern += "/"
+			}
+			http.Handle(
+				// need to add the trailing path so this is treated as a
+				// subtree and matches everything underneath the data page
+				staticFSPattern,
+				// also note we strip the HTTPPath prefix so that a path like
+				// "/page1/" resolves to "/" in the file system on disk
+				middlewareLogger(
+					http.StripPrefix("/"+page.HTTPPath, statichttpfs),
+					"static file server",
+				),
+			)
 
 			if currentCmd.DebugLogging {
 				log.Printf("http listener for data source %s forwarding to webpage endpoint %s\n", sourceName, page.HTTPPath)
@@ -596,10 +625,23 @@ func (cmd *StartCmd) Execute(args []string) (err error) {
 	)
 }
 
+// middleware Handler for debug logging and timing of requests
+func middlewareLogger(next http.Handler, label string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		elapsed := time.Since(start)
+		if currentCmd.DebugLogging {
+			log.Printf("[%s handler] request for %s took %v\n", label, r.URL.Path, elapsed)
+		}
+	})
+}
+
 // a simple struct for templating the javascript file which plots the data
 // in a graph
 type tmplStruct struct {
-	WebsocketsScheme string
+	WebSocketsScheme string
+	WebSocketsPath   string
 	RightJSKey       string
 	LeftJSKey        string
 	RightLabel       string
@@ -609,11 +651,11 @@ type tmplStruct struct {
 	GraphLabel       string
 }
 
-// serveJSTemplate reads the index.js file as a template and generates specific
-// javascript values for the graph handling using the config file
-func makeJSTemplateFunc(page dataPage, insecurewebsockets bool) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		fp := filepath.Join("templates", filepath.Clean(r.URL.Path))
+// makeJSTemplateFunc reads the index.js file as a template and generates
+// specific javascript values for the graph handling using the config file
+func makeJSTemplateFunc(tmplDir string, page dataPage, insecurewebsockets bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fp := filepath.Join(tmplDir, filepath.Clean(r.URL.Path))
 		// Return a 404 if the template doesn't exist
 		info, err := os.Stat(fp)
 		if err != nil {
@@ -647,27 +689,28 @@ func makeJSTemplateFunc(page dataPage, insecurewebsockets bool) func(http.Respon
 			RightAxisLabel: page.RightData.AxisLabel,
 			LeftAxisLabel:  page.LeftData.AxisLabel,
 			GraphLabel:     page.GraphLabel,
+			WebSocketsPath: filepath.Join("/", page.HTTPPath, "ws"),
 		}
 
 		if insecurewebsockets {
-			tmplData.WebsocketsScheme = "ws://"
+			tmplData.WebSocketsScheme = "ws://"
 		} else {
-			tmplData.WebsocketsScheme = "wss://"
+			tmplData.WebSocketsScheme = "wss://"
 		}
 
 		if err := tmpl.Execute(w, tmplData); err != nil {
 			log.Println(err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-	}
+	})
 }
 
 // makeSourceForwardMessageFunc returns a lambda function which uses the broker
 // to create a new subscription channel for every http request, and thus
 // receives all source messages and forwards them to the http client (which is
 // upgraded to a websockets client)
-func makeSourceForwardMessageFunc(msgBroker *Broker, upgrader websocket.Upgrader) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
+func makeSourceForwardMessageFunc(msgBroker *Broker, upgrader websocket.Upgrader) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// upgrade the HTTP request to a websockets connection
 		c, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -718,7 +761,7 @@ func makeSourceForwardMessageFunc(msgBroker *Broker, upgrader websocket.Upgrader
 				log.Printf("error, invalid message sent on internal broker channel: %v\n", msg)
 			}
 		}
-	}
+	})
 }
 
 // makeMQTTMessageBroadcastFunc returns a lambda function which publishes all mqtt messages

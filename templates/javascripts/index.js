@@ -68,7 +68,7 @@ $(document).ready(function () {
   });
 
   {{/* if scheme is meant to be secure, then wss will be used, otherwise ws */}}
-  var ws = new WebSocket("{{.WebsocketsScheme}}"+ location.host + "/data");
+  var ws = new WebSocket("{{.WebSocketsScheme}}"+ location.host + "{{.WebSocketsPath}}");
     
   ws.onopen = function () {
     console.log('Successfully connect WebSocket');
